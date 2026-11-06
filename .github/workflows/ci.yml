@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - name: Check the module against the catalog
         run: |
-          pip install --quiet "pytest==9.2.0" "pyyaml==6.0.3"
+          pip install --quiet "pytest==9.2.0" "pyyaml==6.0.3" "jsonschema==4.26.0"
           python3 -m pytest -q tests
       - name: Install the Crossplane CLI
         run: |
