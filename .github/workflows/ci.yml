@@ -20,7 +20,7 @@ env:
   # Pin a Crossplane CLI release here once you have one you trust; "current" is the latest stable.
   CROSSPLANE_VERSION: current
   # The catalog's sdlc-governance ref; a catalog change merges there first.
-  VRIXEL_CATALOG_REF: main
+  VRIXEL_CATALOG_REF: aws-resource-catalog   # TEMPORARY: until sdlc-governance#9 merges
 
 jobs:
   render:
