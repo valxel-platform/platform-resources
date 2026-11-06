@@ -1,0 +1,12 @@
+# An AlarmRouting as the platform team creates it on a data plane, for `crossplane composition render`.
+apiVersion: aws.platform.vrixel.dev/v1alpha1
+kind: AlarmRouting
+metadata:
+  name: sdlc-tool
+  namespace: crossplane-system
+spec:
+  endpoint: https://sdlc.vrixel.dev/api/signals/cloudwatch
+  tokenSecretRef:
+    name: vrixel-signals-token
+    key: authorization
+  rateLimitPerSecond: 10

@@ -93,3 +93,48 @@ def test_catalog_actions_belong_to_the_service(kind):
               "sns-topic": "sns"}[kind]
     for verb, actions in CATALOG["types"][kind]["access"].items():
         assert all(a.split(":", 1)[0] == prefix for a in actions), f"{kind}: {verb} grants {actions}"
+
+
+ALARM = re.compile(r'\(dict "name" "(?P<name>[^"]+)"(?P<rest>.*?)"says" "(?P<says>(?:[^"\\]|\\.)*)"\)', re.S)
+
+
+def composed_alarms(kind: str) -> dict[str, dict]:
+    """The alarms a Composition builds: its $alarms list, field by field."""
+    out = {}
+    for m in ALARM.finditer((ROOT / f"aws/{kind}-composition.yaml").read_text()):
+        fields = dict(re.findall(r'"(\w+)" ("[^"]*"|\d+|\([^)]*\))', m.group("rest")))
+        out[m.group("name")] = {k: v.strip('"') for k, v in fields.items()} | {"says": m.group("says").replace('\\"', '"')}
+    return out
+
+
+@pytest.mark.parametrize("kind", TYPES)
+def test_every_resource_gets_its_catalog_alarms(kind):
+    t = CATALOG["types"][kind]
+    want = t.get("alarms") or {}
+    got = composed_alarms(kind)
+    assert set(got) == set(want), f"{kind}: alarms {sorted(got)} built, the catalog has {sorted(want)}"
+    for name, a in want.items():
+        g = got[name]
+        assert g["namespace"] == t["cloudwatch_namespace"] and g["metric"] == a["metric"], f"{kind}/{name}: metric"
+        assert (g["statistic"], int(g["period"]), int(g["periods"]), float(g["above"]), g["severity"], g["says"]) == (
+            a["statistic"], a["period_s"], a["periods"], float(a["above"]), a["severity"], a["says"]), f"{kind}/{name}"
+        assert g["dimensions"].startswith("(dict "), f"{kind}/{name}: alarms need the resource's dimensions"
+    comp = (ROOT / f"aws/{kind}-composition.yaml").read_text()
+    if want:
+        # Named with the data plane's prefix, which AlarmRouting's EventBridge rule matches, and
+        # saying whose they are on the first line of the description, which the SDLC tool reads.
+        assert "$alarmBase" in comp and "vrixel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
+    else:
+        assert "kind: MetricAlarm" not in comp
+
+
+def test_alarm_routing_sends_the_prefixed_alarms_to_the_tool():
+    comp = (ROOT / "aws/alarm-routing-composition.yaml").read_text()
+    assert '"alarmName" (list (dict "prefix" $env.namePrefix))' in comp
+    assert '"CloudWatch Alarm State Change"' in comp and "events:InvokeApiDestination" in comp
+    xrd = doc(ROOT / "apis/alarm-routing/definition.yaml")
+    assert xrd["spec"]["names"]["kind"] == "AlarmRouting"
+    for f in ("aws/render/alarm-routing/xr.yaml", "aws/render/alarm-routing/observed.yaml"):
+        assert (ROOT / f).is_file()
+    providers = (ROOT / "aws/provider.yaml").read_text()
+    assert "provider-aws-cloudwatchevents:" in providers

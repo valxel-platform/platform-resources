@@ -1,6 +1,7 @@
 # Builds an SnsTopic as an Amazon SNS topic (constitution VX-19). Never put PHI in a message.
 #
 #   Topic        encrypted with the product's KMS key; FIFO when asked
+#   MetricAlarm  the catalog's standard alarms for this type, routed to the SDLC tool
 #   RolePolicy   one per consumer on its workload-identity role: publish to this topic, plus the
 #                KMS key through SNS only
 #
@@ -86,6 +87,50 @@ spec:
                 policy: {{ dict "Version" "2012-10-17" "Statement" (list $onIt $onKey) | toJson | quote }}
             {{- end }}
             {{- end }}
+            {{- end }}
+            {{- $alarmBase := $base }}
+            {{- /* The catalog's standard alarms for sns-topic (sdlc-governance platform/aws-resources.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "failed-deliveries" "namespace" "AWS/SNS" "metric" "NumberOfNotificationsFailed" "dimensions" (dict "TopicName" $name)
+                        "statistic" "Sum" "period" 300 "periods" 2 "above" 0 "severity" "sev3"
+                        "says" "Messages could not be delivered to a subscriber.") }}
+            {{- /* Each alarm says whose it is on its first line, for the SDLC tool; its state changes reach
+                   the tool through the data plane's AlarmRouting (EventBridge), which matches the name prefix. */}}
+            {{- $users := list }}{{- range $xr.spec.consumers }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "vrixel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "vrixel:product" | default "-") (index $tags "vrixel:feature" | default "-")
+                  (index $tags "vrixel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- range $alarms }}
+            ---
+            apiVersion: cloudwatch.aws.m.upbound.io/v1beta1
+            kind: MetricAlarm
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $alarmBase .name | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                alarmDescription: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                namespace: {{ .namespace | quote }}
+                metricName: {{ .metric | quote }}
+                dimensions: {{ .dimensions | toJson }}
+                statistic: {{ .statistic }}
+                period: {{ .period }}
+                evaluationPeriods: {{ .periods }}
+                threshold: {{ .above }}
+                comparisonOperator: GreaterThanThreshold
+                treatMissingData: notBreaching
+                {{- with $env.alarmTopicArn }}
+                alarmActions: [{{ . | quote }}]
+                okActions: [{{ . | quote }}]
+                {{- end }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
             {{- end }}
             {{- if $arn }}
             ---

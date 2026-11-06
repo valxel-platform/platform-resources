@@ -1,0 +1,51 @@
+# The AlarmRouting API: sends the state changes of the data plane's Vrixel alarms (those named with
+# the vrixel-aws EnvironmentConfig's namePrefix) to the SDLC tool. One per data plane, created by
+# the platform team at setup; aws/alarm-routing-composition.yaml builds it. Products never pick it.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: alarmroutings.aws.platform.vrixel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.vrixel.dev
+  names:
+    kind: AlarmRouting
+    plural: alarmroutings
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [endpoint, tokenSecretRef]
+              properties:
+                endpoint:
+                  type: string
+                  description: The SDLC tool's CloudWatch signal endpoint, https://<host>/api/signals/cloudwatch.
+                  pattern: "^https://[^/]+/.*$"
+                tokenSecretRef:
+                  type: object
+                  description: >-
+                    The Secret, in this namespace, whose key holds the Authorization header EventBridge
+                    sends: "Bearer " followed by the tool's VRIXEL_SIGNALS_TOKEN.
+                  required: [name, key]
+                  properties:
+                    name: {type: string}
+                    key: {type: string}
+                rateLimitPerSecond:
+                  type: integer
+                  description: Most calls per second EventBridge makes to the tool.
+                  minimum: 1
+                  maximum: 300
+                  default: 10
+            status:
+              type: object
+              properties:
+                destinationArn:
+                  type: string
+                ruleName:
+                  type: string

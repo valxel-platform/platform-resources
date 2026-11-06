@@ -7,6 +7,8 @@ data:
   accountId: '111111111111'
   region: us-east-2
   clusterName: agtech-development
+  # The environment this data plane runs (as in product.yaml's pipeline); alarms carry it.
+  environment: development
   namePrefix: vx-
   kmsKeyArn: arn:aws:kms:us-east-2:111111111111:key/0b5c-example
   permissionsBoundaryArn: arn:aws:iam::111111111111:policy/vrixel-workload-boundary

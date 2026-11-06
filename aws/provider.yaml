@@ -115,6 +115,24 @@ spec:
 apiVersion: pkg.crossplane.io/v1beta1
 kind: DeploymentRuntimeConfig
 metadata:
+  name: provider-aws-cloudwatchevents
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-cloudwatchevents
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-cloudwatchevents
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-cloudwatchevents:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-cloudwatchevents
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
   name: provider-aws-iam
 spec:
   serviceAccountTemplate:

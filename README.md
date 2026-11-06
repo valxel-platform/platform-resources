@@ -20,7 +20,8 @@ service and binds it to each environment. This repo is what turns those Resource
 | `sns-topic` | SNS topic (never PHI in a message) | no |
 | `workload-identity` | One component's IAM role, trusted only through EKS Pod Identity for its ServiceAccount, under the permissions boundary | no |
 
-Every type is encrypted with the product's KMS key and tagged with product, feature and data class.
+Every type is encrypted with the product's KMS key and tagged with product, feature and data class,
+and comes with the catalog's standard CloudWatch alarms (see [Alarms](#alarms)).
 
 ## How access works
 
@@ -54,6 +55,32 @@ flowchart LR
 - The component reads names and URLs from the environment variables `workload.yaml` binds, and
   never holds keys.
 
+## Alarms
+
+Each Composition builds its type's alarms from the catalog (throttling for DynamoDB and Kinesis,
+consumers falling behind, old messages and dead letters for SQS, failed deliveries for SNS). Nobody
+writes alarms per feature.
+
+```mermaid
+flowchart LR
+  comp["Composition"] --> alarm["CloudWatch alarm<br/>vx-field-state-…-write-throttled"]
+  alarm -->|"state change (ALARM, OK)"| rule["EventBridge rule<br/>alarm names starting vx-"]
+  rule --> dest["API destination<br/>Authorization from a Secret"]
+  dest --> tool["SDLC tool<br/>POST /api/signals/cloudwatch"]
+```
+
+- An alarm is named with the data plane's `namePrefix`, and the first line of its description says
+  whose it is: `vrixel product=AG feature=AG-FEAT-7 resource=field-state env=production
+  consumers=agtech-field-api alarm=write-throttled severity=sev3`. The rest is what on-call reads.
+- One `AlarmRouting` per data plane sends every state change of those alarms to the tool. In
+  production a firing alarm opens an incident for the components that use the resource, and its OK
+  resolves it; in other environments the tool shows firing alarms at G6.
+- If the EnvironmentConfig has an `alarmTopicArn`, alarms also notify that SNS topic.
+
+OpenChoreo's own observability plane sees components, not AWS services: their CloudWatch metrics
+carry no OpenChoreo labels, and its alert rules can't use them. A component's calls to the services
+show in OpenChoreo as spans when the template instruments the AWS SDK.
+
 ## Install on a data plane (once per product environment)
 
 Each product environment is its own AWS account with an EKS data plane (product.yaml
@@ -72,6 +99,11 @@ Each product environment is its own AWS account with an EKS data plane (product.
 6. `aws/environment-config.yaml`, filled in for this account: account, region, EKS cluster, KMS
    key, permissions boundary, optional alarm topic and access-log bucket.
 7. `apis/*/definition.yaml`, `aws/*-composition.yaml` and `cluster-agent-rbac.yaml`.
+8. Alarm routing: a Secret in `crossplane-system` whose key holds `Bearer <VRIXEL_SIGNALS_TOKEN>`,
+   then an `AlarmRouting` (`aws/render/alarm-routing/xr.yaml` shows one) pointing at the tool's
+   `/api/signals/cloudwatch`. The permissions boundary must allow `events:InvokeApiDestination` on
+   `api-destination/<namePrefix>sdlc-alarms/*`, and provider-aws-cloudwatchevents needs its own
+   Pod Identity association.
 
 On the control plane, once: `apis/*/resource-type.yaml`.
 

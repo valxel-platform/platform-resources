@@ -19,5 +19,6 @@ spec:
   tags:
     vrixel:product: AG
     vrixel:feature: AG-FEAT-7
+    vrixel:resource: jobs
     vrixel:data-class: general
   size: small
