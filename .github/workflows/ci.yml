@@ -62,7 +62,12 @@ jobs:
       - name: Validate against the provider and XRD schemas
         run: |
           cat aws/provider.yaml apis/*/definition.yaml > extensions.yaml
-          crossplane beta validate extensions.yaml out/ --skip-success-results
+          # The CLI moved validate under `resource`; older ones have it under `beta`.
+          if crossplane resource validate --help >/dev/null 2>&1; then
+            crossplane resource validate extensions.yaml out/ --skip-success-results
+          else
+            crossplane beta validate extensions.yaml out/ --skip-success-results
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
