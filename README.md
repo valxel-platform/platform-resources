@@ -81,6 +81,11 @@ OpenChoreo's own observability plane sees components, not AWS services: their Cl
 carry no OpenChoreo labels, and its alert rules can't use them. A component's calls to the services
 show in OpenChoreo as spans when the template instruments the AWS SDK.
 
+## Self-hosted error tracking
+
+`observability/glitchtip/` runs GlitchTip in a product's own project, for products whose error
+reports must stay in their own account and region (payments, data in India). See its README.
+
 ## Install on a data plane (once per product environment)
 
 Each product environment is its own AWS account with an EKS data plane (product.yaml
