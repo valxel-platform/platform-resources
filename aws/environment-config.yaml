@@ -12,6 +12,8 @@ data:
   # The EKS cluster the data plane runs on, for Pod Identity associations.
   clusterName: <eks-cluster>
   # Prepended to every AWS resource name, so these never collide with resources made by hand.
+  # The environment this data plane runs (as in product.yaml's pipeline); alarms carry it.
+  environment: <environment>
   namePrefix: vx-
   # The product's customer-managed KMS key in this account: every table, stream, queue, bucket
   # and topic is encrypted with it, and components get Decrypt/GenerateDataKey only through the

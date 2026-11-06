@@ -2,6 +2,7 @@
 #
 #   Stream       one shard (small) or on-demand (medium, large); encrypted with the product's KMS
 #                key; kept in AWS if the Kubernetes object goes (no Delete policy)
+#   MetricAlarm  the catalog's standard alarms for this type, routed to the SDLC tool
 #   RolePolicy   one per consumer on its workload-identity role: the design's actions on this
 #                stream and its enhanced fan-out consumers, plus the KMS key through Kinesis only
 #
@@ -101,6 +102,53 @@ spec:
                 policy: {{ dict "Version" "2012-10-17" "Statement" (list $onIt $onKey) | toJson | quote }}
             {{- end }}
             {{- end }}
+            {{- end }}
+            {{- $alarmBase := $name }}
+            {{- /* The catalog's standard alarms for kinesis-stream (sdlc-governance platform/aws-resources.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "consumers-behind" "namespace" "AWS/Kinesis" "metric" "GetRecords.IteratorAgeMilliseconds" "dimensions" (dict "StreamName" $name)
+                        "statistic" "Maximum" "period" 300 "periods" 3 "above" 300000 "severity" "sev2"
+                        "says" "A consumer is over five minutes behind; records it doesn't read before retention ends are lost.")
+                  (dict "name" "write-throttled" "namespace" "AWS/Kinesis" "metric" "WriteProvisionedThroughputExceeded" "dimensions" (dict "StreamName" $name)
+                        "statistic" "Sum" "period" 300 "periods" 2 "above" 0 "severity" "sev3"
+                        "says" "Writes are throttled: the stream needs more shards, or one partition key is too hot.") }}
+            {{- /* Each alarm says whose it is on its first line, for the SDLC tool; its state changes reach
+                   the tool through the data plane's AlarmRouting (EventBridge), which matches the name prefix. */}}
+            {{- $users := list }}{{- range $xr.spec.consumers }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "vrixel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "vrixel:product" | default "-") (index $tags "vrixel:feature" | default "-")
+                  (index $tags "vrixel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- range $alarms }}
+            ---
+            apiVersion: cloudwatch.aws.m.upbound.io/v1beta1
+            kind: MetricAlarm
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $alarmBase .name | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                alarmDescription: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                namespace: {{ .namespace | quote }}
+                metricName: {{ .metric | quote }}
+                dimensions: {{ .dimensions | toJson }}
+                statistic: {{ .statistic }}
+                period: {{ .period }}
+                evaluationPeriods: {{ .periods }}
+                threshold: {{ .above }}
+                comparisonOperator: GreaterThanThreshold
+                treatMissingData: notBreaching
+                {{- with $env.alarmTopicArn }}
+                alarmActions: [{{ . | quote }}]
+                okActions: [{{ . | quote }}]
+                {{- end }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
             {{- end }}
             {{- if $arn }}
             ---

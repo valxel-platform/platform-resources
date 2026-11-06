@@ -1,0 +1,169 @@
+# Builds an AlarmRouting: the data plane's Vrixel alarms, through EventBridge, to the SDLC tool.
+#
+#   Connection      EventBridge's credentials for the tool: the Authorization header from the Secret
+#   ApiDestination  the tool's /api/signals/cloudwatch, rate limited
+#   Role            what EventBridge assumes to call it (this account's rules only), under the
+#                   permissions boundary; a RolePolicy allows invoking this destination only
+#   Rule            CloudWatch alarm state changes for alarms named with the namePrefix
+#   Target          the rule's target: the destination, retried for a day
+#
+# Every state change is sent (ALARM, OK, INSUFFICIENT_DATA): an OK resolves the tool's signal.
+# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: alarm-routing-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: AlarmRouting
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $tags := merge (dict "vrixel:purpose" "alarm-routing") (default (dict) $env.tags) }}
+            {{- $base := printf "%ssdlc-alarms" $env.namePrefix }}
+            {{- $destArn := "" }}
+            {{- with getComposedResource . "destination" }}
+            {{- $destArn = dig "status" "atProvider" "arn" "" . }}
+            {{- end }}
+            {{- $pattern := dict "source" (list "aws.cloudwatch") "detail-type" (list "CloudWatch Alarm State Change")
+                  "detail" (dict "alarmName" (list (dict "prefix" $env.namePrefix))) }}
+            {{- $trust := dict "Version" "2012-10-17" "Statement" (list (dict "Effect" "Allow"
+                  "Principal" (dict "Service" "events.amazonaws.com") "Action" "sts:AssumeRole"
+                  "Condition" (dict "StringEquals" (dict "aws:SourceAccount" (toString $env.accountId))))) }}
+            {{- $invoke := dict "Version" "2012-10-17" "Statement" (list (dict "Effect" "Allow"
+                  "Action" "events:InvokeApiDestination"
+                  "Resource" (printf "arn:aws:events:%s:%s:api-destination/%s/*" $env.region (toString $env.accountId) $base))) }}
+            ---
+            apiVersion: cloudwatchevents.aws.m.upbound.io/v1beta1
+            kind: Connection
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "connection" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                description: The SDLC tool's signals token
+                authorizationType: API_KEY
+                authParameters:
+                  apiKey:
+                    key: Authorization
+                    valueSecretRef:
+                      name: {{ $xr.spec.tokenSecretRef.name | quote }}
+                      key: {{ $xr.spec.tokenSecretRef.key | quote }}
+            ---
+            apiVersion: cloudwatchevents.aws.m.upbound.io/v1beta1
+            kind: APIDestination
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "destination" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                description: The Vrixel SDLC tool's CloudWatch alarm signals
+                invocationEndpoint: {{ $xr.spec.endpoint | quote }}
+                httpMethod: POST
+                invocationRateLimitPerSecond: {{ $xr.spec.rateLimitPerSecond | default 10 }}
+                connectionArnRef:
+                  name: {{ $xr.metadata.name }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "role" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              forProvider:
+                assumeRolePolicy: {{ $trust | toJson | quote }}
+                permissionsBoundary: {{ $env.permissionsBoundaryArn | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "invoke" }}
+            spec:
+              forProvider:
+                role: {{ $base | quote }}
+                policy: {{ $invoke | toJson | quote }}
+            ---
+            apiVersion: cloudwatchevents.aws.m.upbound.io/v1beta1
+            kind: Rule
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "rule" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                description: State changes of the Vrixel alarms, for the SDLC tool
+                eventPattern: {{ $pattern | toJson | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $destArn }}
+            ---
+            apiVersion: cloudwatchevents.aws.m.upbound.io/v1beta1
+            kind: Target
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "target" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                targetId: sdlc-tool
+                arn: {{ $destArn | quote }}
+                ruleRef:
+                  name: {{ $xr.metadata.name }}
+                roleArnRef:
+                  name: {{ $xr.metadata.name }}
+                retryPolicy:
+                  maximumEventAgeInSeconds: 86400
+                  maximumRetryAttempts: 185
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: AlarmRouting
+            status:
+              destinationArn: {{ $destArn | quote }}
+              ruleName: {{ $base | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

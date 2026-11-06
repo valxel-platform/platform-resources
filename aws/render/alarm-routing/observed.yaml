@@ -1,0 +1,17 @@
+# The composed resources as the provider reports them once AWS has finished: pass with
+# --observed-resources to render a later reconcile, where the target and status appear.
+apiVersion: cloudwatchevents.aws.m.upbound.io/v1beta1
+kind: APIDestination
+metadata:
+  name: sdlc-tool
+  namespace: crossplane-system
+  annotations:
+    crossplane.io/composition-resource-name: destination
+status:
+  atProvider:
+    arn: arn:aws:events:us-east-2:111111111111:api-destination/vx-sdlc-alarms/7c1e0b9a-0000-4000-8000-000000000000
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

@@ -2,7 +2,7 @@
 #
 #   Queue        the dead-letter queue (14 days' retention), then the queue, which moves a message
 #                there after max_receives; both encrypted with the product's KMS key
-#   MetricAlarm  when the data plane has an alarm topic: any message in the dead-letter queue
+#   MetricAlarm  the catalog's alarms: oldest message too old, anything in the dead-letter queue
 #   RolePolicy   one per consumer on its workload-identity role: the design's actions on the
 #                queue, plus the KMS key through SQS only
 #
@@ -93,29 +93,48 @@ spec:
                   {{ $k | quote }}: {{ $v | toString | quote }}
                   {{- end }}
             {{- end }}
-            {{- if $env.alarmTopicArn }}
+            {{- $alarmBase := $base }}
+            {{- /* The catalog's standard alarms for sqs-queue (sdlc-governance platform/aws-resources.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "backlog-age" "namespace" "AWS/SQS" "metric" "ApproximateAgeOfOldestMessage" "dimensions" (dict "QueueName" $name)
+                        "statistic" "Maximum" "period" 300 "periods" 3 "above" 900 "severity" "sev3"
+                        "says" "Messages have waited over 15 minutes: the consumer is slow or down.")
+                  (dict "name" "dead-letters" "namespace" "AWS/SQS" "metric" "ApproximateNumberOfMessagesVisible" "dimensions" (dict "QueueName" $dlqName)
+                        "statistic" "Maximum" "period" 300 "periods" 1 "above" 0 "severity" "sev3"
+                        "says" "Messages failed every retry and are in the dead-letter queue.") }}
+            {{- /* Each alarm says whose it is on its first line, for the SDLC tool; its state changes reach
+                   the tool through the data plane's AlarmRouting (EventBridge), which matches the name prefix. */}}
+            {{- $users := list }}{{- range $xr.spec.consumers }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "vrixel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "vrixel:product" | default "-") (index $tags "vrixel:feature" | default "-")
+                  (index $tags "vrixel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- range $alarms }}
             ---
             apiVersion: cloudwatch.aws.m.upbound.io/v1beta1
             kind: MetricAlarm
             metadata:
-              name: {{ printf "%s-dlq-alarm" $xr.metadata.name | trunc 63 }}
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
               annotations:
-                {{ setResourceNameAnnotation "dead-letter-alarm" }}
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $alarmBase .name | quote }}
             spec:
               forProvider:
                 region: {{ $env.region | quote }}
-                alarmDescription: {{ printf "Messages in %s's dead-letter queue" $name | quote }}
-                namespace: AWS/SQS
-                metricName: ApproximateNumberOfMessagesVisible
-                dimensions:
-                  QueueName: {{ $dlqName | quote }}
-                statistic: Maximum
-                period: 300
-                evaluationPeriods: 1
-                threshold: 0
+                alarmDescription: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                namespace: {{ .namespace | quote }}
+                metricName: {{ .metric | quote }}
+                dimensions: {{ .dimensions | toJson }}
+                statistic: {{ .statistic }}
+                period: {{ .period }}
+                evaluationPeriods: {{ .periods }}
+                threshold: {{ .above }}
                 comparisonOperator: GreaterThanThreshold
                 treatMissingData: notBreaching
-                alarmActions: [{{ $env.alarmTopicArn | quote }}]
+                {{- with $env.alarmTopicArn }}
+                alarmActions: [{{ . | quote }}]
+                okActions: [{{ . | quote }}]
+                {{- end }}
                 tags:
                   {{- range $k, $v := $tags }}
                   {{ $k | quote }}: {{ $v | toString | quote }}
