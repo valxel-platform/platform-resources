@@ -4,7 +4,7 @@
 #   Table        on-demand (small, medium) or provisioned with auto scaling left to the product
 #                (large starts at 50/50); encrypted with the product's KMS key; point-in-time
 #                recovery; deletion protection on; kept in AWS if the Kubernetes object goes
-#                (deletionPolicy Orphan)
+#                (managementPolicies without Delete)
 #   RolePolicy   one per consumer, on the consumer's workload-identity role: exactly the actions
 #                the design gave it, on this table and its indexes, plus the KMS key through
 #                DynamoDB only
@@ -78,7 +78,9 @@ spec:
                 {{ setResourceNameAnnotation "table" }}
                 crossplane.io/external-name: {{ $tableName | quote }}
             spec:
-              deletionPolicy: Orphan
+              # Keep the AWS resource (and its data) if this object is deleted: Crossplane may
+              # create, update and observe it, never delete it (VX-19).
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
               forProvider:
                 region: {{ $env.region | quote }}
                 hashKey: {{ $xr.spec.partition_key | quote }}
@@ -115,14 +117,14 @@ spec:
                 {{- end }}
                 {{- if $xr.spec.ttl_attribute }}
                 ttl:
-                  - attributeName: {{ $xr.spec.ttl_attribute | quote }}
-                    enabled: true
+                  attributeName: {{ $xr.spec.ttl_attribute | quote }}
+                  enabled: true
                 {{- end }}
                 serverSideEncryption:
-                  - enabled: true
-                    kmsKeyArn: {{ $env.kmsKeyArn | quote }}
+                  enabled: true
+                  kmsKeyArn: {{ $env.kmsKeyArn | quote }}
                 pointInTimeRecovery:
-                  - enabled: true
+                  enabled: true
                 deletionProtectionEnabled: true
                 tags:
                   {{- range $k, $v := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}

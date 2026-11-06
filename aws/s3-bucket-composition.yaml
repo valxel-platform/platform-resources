@@ -66,7 +66,9 @@ spec:
                 {{ setResourceNameAnnotation "bucket" }}
                 crossplane.io/external-name: {{ $name | quote }}
             spec:
-              deletionPolicy: Orphan
+              # Keep the AWS resource (and its data) if this object is deleted: Crossplane may
+              # create, update and observe it, never delete it (VX-19).
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
               forProvider:
                 region: {{ $env.region | quote }}
                 forceDestroy: false
@@ -86,7 +88,7 @@ spec:
                 region: {{ $env.region | quote }}
                 bucketRef: {name: {{ $xr.metadata.name }}}
                 rule:
-                  - objectOwnership: BucketOwnerEnforced
+                  objectOwnership: BucketOwnerEnforced
             ---
             apiVersion: s3.aws.m.upbound.io/v1beta1
             kind: BucketPublicAccessBlock
@@ -115,8 +117,8 @@ spec:
                 bucketRef: {name: {{ $xr.metadata.name }}}
                 rule:
                   - applyServerSideEncryptionByDefault:
-                      - sseAlgorithm: aws:kms
-                        kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
+                      sseAlgorithm: aws:kms
+                      kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
                     bucketKeyEnabled: true
             {{- if $xr.spec.versioning }}
             ---
@@ -131,7 +133,7 @@ spec:
                 region: {{ $env.region | quote }}
                 bucketRef: {name: {{ $xr.metadata.name }}}
                 versioningConfiguration:
-                  - status: Enabled
+                  status: Enabled
             {{- end }}
             {{- if gt (int $xr.spec.expire_days) 0 }}
             ---

@@ -82,7 +82,8 @@ def test_stored_data_is_never_deleted_with_its_binding(kind):
     comp = (ROOT / f"aws/{kind}-composition.yaml").read_text()
     if CATALOG["types"][kind].get("stateful"):
         assert rt["spec"]["retainPolicy"] == "Retain"
-        assert "deletionPolicy: Orphan" in comp
+        # Crossplane v2 namespaced resources: no Delete in managementPolicies keeps the AWS resource.
+        assert 'managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]' in comp
     assert "kmsKeyArn" in comp or kind == "workload-identity", f"{kind}: not encrypted with the product key"
 
 

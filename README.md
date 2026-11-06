@@ -101,5 +101,5 @@ outputs, and stored data is kept when its binding goes.
 1. A pull request to the catalog in sdlc-governance: what it's for and not for, data classes,
    parameters, IAM actions per access, sizes with planning costs, built-in defaults, emulator.
 2. Here: `apis/<type>/definition.yaml` and `resource-type.yaml`, `aws/<type>-composition.yaml`
-   (encrypted with the product key, a `RolePolicy` per consumer, `deletionPolicy: Orphan` and
-   `retainPolicy: Retain` if it stores data), and render samples. Add the provider if it's new.
+   (encrypted with the product key, a `RolePolicy` per consumer, `managementPolicies` without
+   `Delete` and `retainPolicy: Retain` if it stores data), and render samples. Add the provider if it's new.

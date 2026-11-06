@@ -1,7 +1,7 @@
 # Builds a KinesisStream as an Amazon Kinesis data stream (constitution VX-19).
 #
 #   Stream       one shard (small) or on-demand (medium, large); encrypted with the product's KMS
-#                key; kept in AWS if the Kubernetes object goes (deletionPolicy Orphan)
+#                key; kept in AWS if the Kubernetes object goes (no Delete policy)
 #   RolePolicy   one per consumer on its workload-identity role: the design's actions on this
 #                stream and its enhanced fan-out consumers, plus the KMS key through Kinesis only
 #
@@ -59,17 +59,19 @@ spec:
                 {{ setResourceNameAnnotation "stream" }}
                 crossplane.io/external-name: {{ $name | quote }}
             spec:
-              deletionPolicy: Orphan
+              # Keep the AWS resource (and its data) if this object is deleted: Crossplane may
+              # create, update and observe it, never delete it (VX-19).
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
               forProvider:
                 region: {{ $env.region | quote }}
                 retentionPeriod: {{ $xr.spec.retention_hours }}
                 {{- if eq $xr.spec.size "small" }}
                 shardCount: 1
                 streamModeDetails:
-                  - streamMode: PROVISIONED
+                  streamMode: PROVISIONED
                 {{- else }}
                 streamModeDetails:
-                  - streamMode: ON_DEMAND
+                  streamMode: ON_DEMAND
                 {{- end }}
                 encryptionType: KMS
                 kmsKeyId: {{ $env.kmsKeyArn | quote }}

@@ -54,10 +54,10 @@ spec:
               name: {{ $xr.metadata.name }}
               annotations:
                 {{ setResourceNameAnnotation "topic" }}
+                crossplane.io/external-name: {{ $name | quote }}
             spec:
               forProvider:
                 region: {{ $env.region | quote }}
-                name: {{ $name | quote }}
                 fifoTopic: {{ $xr.spec.fifo }}
                 kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
                 tags:
