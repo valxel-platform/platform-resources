@@ -1,0 +1,10 @@
+# The providers use the credentials EKS Pod Identity gives their pods (provider.yaml), so nothing
+# account-specific is stored here. Namespaced AWS resources use the ClusterProviderConfig named
+# default unless they say otherwise. Apply after the providers report Healthy.
+apiVersion: aws.m.upbound.io/v1beta1
+kind: ClusterProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: PodIdentity

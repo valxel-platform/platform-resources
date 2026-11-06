@@ -1,0 +1,85 @@
+# An Amazon S3 bucket, private and encrypted, as an OpenChoreo ClusterResourceType (constitution VX-19). Apply on the control plane.
+# The parameters are what a design's Resources line sets (the SDLC tool fills consumers and tags);
+# environmentConfigs.size is set per environment by the binding. It renders one S3Bucket into the
+# cell namespace; the data plane's Composition builds it in that environment's AWS account.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: s3-bucket
+  annotations:
+    openchoreo.dev/description: >-
+      An Amazon S3 bucket, private and encrypted, built by the Vrixel platform's Crossplane Composition with encryption, private
+      access and least-privilege IAM.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      properties:
+        versioning:
+          type: boolean
+          description: Keep earlier versions of overwritten or deleted objects.
+          default: true
+        expire_days:
+          type: integer
+          description: Delete objects (and earlier versions) after this many days; 0 keeps them.
+          minimum: 0
+          default: 0
+        consumers:
+          type: array
+          description: >-
+            The components that use it and the IAM actions each may take on it, from the
+            platform catalog's access (written by the SDLC tool from the approved design).
+          default: []
+          items:
+            type: object
+            required: [component, actions]
+            properties:
+              component:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+              access:
+                type: array
+                items: {type: string, enum: [read, write, delete]}
+              actions:
+                type: array
+                items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+        tags:
+          type: object
+          description: Tags for the AWS resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Stored data outlives its binding: removing it keeps the AWS resource (VX-19).
+  retainPolicy: Retain
+
+  outputs:
+    - name: bucket
+      value: ${applied.instance.status.bucketName}
+    - name: arn
+      value: ${applied.instance.status.arn}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.bucketName) && has(applied.instance.status.arn)}"
+      template:
+        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        kind: S3Bucket
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          versioning: ${parameters.versioning}
+          expire_days: ${parameters.expire_days}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

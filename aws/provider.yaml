@@ -1,0 +1,149 @@
+# The Crossplane AWS providers this module uses, each authenticating with EKS Pod Identity.
+# Each provider needs a Pod Identity association for its ServiceAccount
+# (crossplane-system/<provider name>) linked to an IAM role allowed to manage its service in this
+# account; the ServiceAccount names are fixed so the associations survive upgrades. Create the
+# associations before the providers. provider-aws-iam's role may only create roles under the
+# platform's permissions boundary (environment-config.yaml).
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-dynamodb
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-dynamodb
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-dynamodb
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-dynamodb:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-dynamodb
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-kinesis
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-kinesis
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-kinesis
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-kinesis:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-kinesis
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-sqs
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-sqs
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-sqs
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-sqs:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-sqs
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-s3
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-s3
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-s3
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-s3:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-s3
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-sns
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-sns
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-sns
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-sns:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-sns
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-cloudwatch
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-cloudwatch
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-cloudwatch
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-cloudwatch:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-cloudwatch
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-iam
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-iam
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-iam
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-iam:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-iam
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws-eks
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws-eks
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-eks
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-aws-eks:v2.9.0
+  runtimeConfigRef:
+    name: provider-aws-eks

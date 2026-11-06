@@ -1,0 +1,31 @@
+# A DynamoTable as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition).
+apiVersion: aws.platform.vrixel.dev/v1alpha1
+kind: DynamoTable
+metadata:
+  name: r-field-state-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  partition_key: field_id
+  sort_key: reading_at
+  ttl_attribute: expires_at
+  indexes:
+  - by-farm:farm_id:reading_at
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - dynamodb:GetItem
+    - dynamodb:PutItem
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - dynamodb:Query
+  tags:
+    vrixel:product: AG
+    vrixel:feature: AG-FEAT-7
+    vrixel:data-class: general
+  size: small

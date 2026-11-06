@@ -1,0 +1,63 @@
+# An IAM role for one component, through EKS Pod Identity, as an OpenChoreo ClusterResourceType (constitution VX-19). Apply on the control plane.
+# The parameters are what a design's Resources line sets (the SDLC tool fills consumers and tags);
+# environmentConfigs.size is set per environment by the binding. It renders one WorkloadIdentity into the
+# cell namespace; the data plane's Composition builds it in that environment's AWS account.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: workload-identity
+  annotations:
+    openchoreo.dev/description: >-
+      An IAM role for one component, through EKS Pod Identity, built by the Vrixel platform's Crossplane Composition with encryption, private
+      access and least-privilege IAM.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [component]
+      properties:
+        component:
+          type: string
+          description: The OpenChoreo component this identity is for.
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        service_account:
+          type: string
+          description: The component's Kubernetes ServiceAccount; empty means the component's name.
+          default: ""
+        tags:
+          type: object
+          description: Tags for the AWS resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Nothing stored that outlives it.
+  retainPolicy: Delete
+
+  outputs:
+    - name: role
+      value: ${applied.instance.status.roleArn}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.roleArn)}"
+      template:
+        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        kind: WorkloadIdentity
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          component: ${parameters.component}
+          service_account: ${parameters.service_account}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

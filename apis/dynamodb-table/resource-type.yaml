@@ -1,0 +1,98 @@
+# An Amazon DynamoDB table, as an OpenChoreo ClusterResourceType (constitution VX-19). Apply on the control plane.
+# The parameters are what a design's Resources line sets (the SDLC tool fills consumers and tags);
+# environmentConfigs.size is set per environment by the binding. It renders one DynamoTable into the
+# cell namespace; the data plane's Composition builds it in that environment's AWS account.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: dynamodb-table
+  annotations:
+    openchoreo.dev/description: >-
+      An Amazon DynamoDB table, built by the Vrixel platform's Crossplane Composition with encryption, private
+      access and least-privilege IAM.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [partition_key]
+      properties:
+        partition_key:
+          type: string
+          description: Attribute name of the partition (hash) key, a string. Never changes.
+          pattern: "^[A-Za-z_][A-Za-z0-9_.-]{0,254}$"
+        sort_key:
+          type: string
+          description: Attribute name of the sort (range) key, a string; empty for none. Never changes.
+          default: ""
+        ttl_attribute:
+          type: string
+          description: Attribute holding an expiry time (epoch seconds); empty for none.
+          default: ""
+        indexes:
+          type: array
+          description: "Global secondary indexes, each name:partition_key[:sort_key] (string keys)."
+          default: []
+          items:
+            type: string
+            pattern: "^[A-Za-z0-9_.-]{3,255}:[A-Za-z_][A-Za-z0-9_.-]*(:[A-Za-z_][A-Za-z0-9_.-]*)?$"
+        consumers:
+          type: array
+          description: >-
+            The components that use it and the IAM actions each may take on it, from the
+            platform catalog's access (written by the SDLC tool from the approved design).
+          default: []
+          items:
+            type: object
+            required: [component, actions]
+            properties:
+              component:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+              access:
+                type: array
+                items: {type: string, enum: [read, write, delete]}
+              actions:
+                type: array
+                items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+        tags:
+          type: object
+          description: Tags for the AWS resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Stored data outlives its binding: removing it keeps the AWS resource (VX-19).
+  retainPolicy: Retain
+
+  outputs:
+    - name: table
+      value: ${applied.instance.status.tableName}
+    - name: arn
+      value: ${applied.instance.status.arn}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.tableName) && has(applied.instance.status.arn)}"
+      template:
+        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        kind: DynamoTable
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          partition_key: ${parameters.partition_key}
+          sort_key: ${parameters.sort_key}
+          ttl_attribute: ${parameters.ttl_attribute}
+          indexes: ${parameters.indexes}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

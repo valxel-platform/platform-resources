@@ -1,0 +1,17 @@
+# The composed resources as the provider reports them once AWS has finished: pass with
+# --observed-resources to render a later reconcile, where the XR gets its outputs.
+apiVersion: sns.aws.m.upbound.io/v1beta1
+kind: Topic
+metadata:
+  name: r-alerts-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: topic
+status:
+  atProvider:
+    arn: arn:aws:sns:us-east-2:111111111111:vx-alerts
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

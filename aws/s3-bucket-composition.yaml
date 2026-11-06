@@ -1,0 +1,224 @@
+# Builds an S3Bucket as a private, encrypted Amazon S3 bucket (constitution VX-19).
+#
+#   Bucket                                   kept in AWS if the Kubernetes object goes, never
+#                                            emptied by Crossplane (forceDestroy false)
+#   BucketOwnershipControls, PublicAccessBlock  no ACLs, no public access, ever
+#   BucketServerSideEncryptionConfiguration  the product's KMS key, with bucket keys
+#   BucketVersioning                         when versioning is on
+#   BucketPolicy                             refuses anything but TLS
+#   BucketLifecycleConfiguration             when expire_days is set
+#   BucketLogging                            when the data plane has an access-log bucket
+#   RolePolicy                               one per consumer: the design's actions on the bucket
+#                                            and its objects, plus the KMS key through S3 only
+#
+# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: s3-bucket-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: S3Bucket
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+
+            {{- $name := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $name = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $name) "-") "-" }}
+            {{- if gt (len $name) 63 }}{{- $name = printf "%s-%s" ($name | trunc 54 | trimSuffix "-") ($name | sha256sum | trunc 8) }}{{- end }}
+            {{- with getComposedResource . "bucket" }}
+            {{- with dig "metadata" "annotations" "crossplane.io/external-name" "" . }}{{- $name = . }}{{- end }}
+            {{- end }}
+            {{- $arn := "" }}
+            {{- with getComposedResource . "bucket" }}{{- $arn = dig "status" "atProvider" "arn" "" . }}{{- end }}
+            {{- $ref := dict "bucketRef" (dict "name" $xr.metadata.name) }}
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: Bucket
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "bucket" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              deletionPolicy: Orphan
+              forProvider:
+                region: {{ $env.region | quote }}
+                forceDestroy: false
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketOwnershipControls
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "ownership" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                rule:
+                  - objectOwnership: BucketOwnerEnforced
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketPublicAccessBlock
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "public-access-block" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                blockPublicAcls: true
+                blockPublicPolicy: true
+                ignorePublicAcls: true
+                restrictPublicBuckets: true
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketServerSideEncryptionConfiguration
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "encryption" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                rule:
+                  - applyServerSideEncryptionByDefault:
+                      - sseAlgorithm: aws:kms
+                        kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
+                    bucketKeyEnabled: true
+            {{- if $xr.spec.versioning }}
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketVersioning
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "versioning" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                versioningConfiguration:
+                  - status: Enabled
+            {{- end }}
+            {{- if gt (int $xr.spec.expire_days) 0 }}
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketLifecycleConfiguration
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "lifecycle" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                rule:
+                  - id: expire
+                    status: Enabled
+                    filter:
+                      - prefix: ""
+                    expiration:
+                      - days: {{ $xr.spec.expire_days }}
+                    noncurrentVersionExpiration:
+                      - noncurrentDays: {{ $xr.spec.expire_days }}
+                    abortIncompleteMultipartUpload:
+                      - daysAfterInitiation: 7
+            {{- end }}
+            {{- if $env.accessLogBucket }}
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketLogging
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "logging" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                targetBucket: {{ $env.accessLogBucket | quote }}
+                targetPrefix: {{ printf "%s/" $name | quote }}
+            {{- end }}
+            {{- if $arn }}
+            {{- $tls := dict "Sid" "TlsOnly" "Effect" "Deny" "Principal" "*" "Action" "s3:*" "Resource" (list $arn (printf "%s/*" $arn)) "Condition" (dict "Bool" (dict "aws:SecureTransport" "false")) }}
+            ---
+            apiVersion: s3.aws.m.upbound.io/v1beta1
+            kind: BucketPolicy
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "policy" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                bucketRef: {name: {{ $xr.metadata.name }}}
+                policy: {{ dict "Version" "2012-10-17" "Statement" (list $tls) | toJson | quote }}
+            {{- end }}
+            {{- if $arn }}
+            {{- range $xr.spec.consumers }}
+            {{- if .actions }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix .component $nsHash | trunc 64 }}
+            {{- $onIt := dict "Sid" "Resource" "Effect" "Allow" "Action" .actions "Resource" (list $arn (printf "%s/*" $arn)) }}
+            {{- $kms := list "kms:Decrypt" }}
+            {{- if has "write" (default (list) .access) }}{{- $kms = append $kms "kms:GenerateDataKey" }}{{- end }}
+            {{- $via := dict "StringEquals" (dict "kms:ViaService" (printf "s3.%s.amazonaws.com" $env.region)) }}
+            {{- $onKey := dict "Sid" "Key" "Effect" "Allow" "Action" $kms "Resource" $env.kmsKeyArn "Condition" $via }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s" .component) }}
+            spec:
+              forProvider:
+                role: {{ $role | quote }}
+                policy: {{ dict "Version" "2012-10-17" "Statement" (list $onIt $onKey) | toJson | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $arn }}
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: S3Bucket
+            status:
+              bucketName: {{ $name | quote }}
+              arn: {{ $arn | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

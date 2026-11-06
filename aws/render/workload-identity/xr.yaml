@@ -1,0 +1,15 @@
+# A WorkloadIdentity as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition).
+apiVersion: aws.platform.vrixel.dev/v1alpha1
+kind: WorkloadIdentity
+metadata:
+  name: r-agtech-field-api-identity-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  component: agtech-field-api
+  service_account: ''
+  tags:
+    vrixel:product: AG
+    vrixel:feature: AG-FEAT-7
+    vrixel:data-class: general
+  size: small

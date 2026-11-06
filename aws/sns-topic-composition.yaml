@@ -1,0 +1,100 @@
+# Builds an SnsTopic as an Amazon SNS topic (constitution VX-19). Never put PHI in a message.
+#
+#   Topic        encrypted with the product's KMS key; FIFO when asked
+#   RolePolicy   one per consumer on its workload-identity role: publish to this topic, plus the
+#                KMS key through SNS only
+#
+# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: sns-topic-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: SnsTopic
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 250 }}{{- $base = printf "%s-%s" ($base | trunc 241 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- $name := printf "%s%s" $base (ternary ".fifo" "" $xr.spec.fifo) }}
+            {{- $arn := "" }}
+            {{- with getComposedResource . "topic" }}{{- $arn = dig "status" "atProvider" "arn" "" . }}{{- end }}
+            ---
+            apiVersion: sns.aws.m.upbound.io/v1beta1
+            kind: Topic
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "topic" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                name: {{ $name | quote }}
+                fifoTopic: {{ $xr.spec.fifo }}
+                kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $arn }}
+            {{- range $xr.spec.consumers }}
+            {{- if .actions }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix .component $nsHash | trunc 64 }}
+            {{- $onIt := dict "Sid" "Resource" "Effect" "Allow" "Action" .actions "Resource" (list $arn) }}
+            {{- $kms := list "kms:Decrypt" }}
+            {{- if has "write" (default (list) .access) }}{{- $kms = append $kms "kms:GenerateDataKey" }}{{- end }}
+            {{- $via := dict "StringEquals" (dict "kms:ViaService" (printf "sns.%s.amazonaws.com" $env.region)) }}
+            {{- $onKey := dict "Sid" "Key" "Effect" "Allow" "Action" $kms "Resource" $env.kmsKeyArn "Condition" $via }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s" .component) }}
+            spec:
+              forProvider:
+                role: {{ $role | quote }}
+                policy: {{ dict "Version" "2012-10-17" "Statement" (list $onIt $onKey) | toJson | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $arn }}
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: SnsTopic
+            status:
+              arn: {{ $arn | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

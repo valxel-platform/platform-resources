@@ -1,0 +1,71 @@
+# Required check: render. It checks the module against the platform catalog, renders every
+# Composition with Crossplane (first reconcile and after AWS reports), and validates what they
+# compose against the AWS providers' schemas and this module's XRDs.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin a Crossplane CLI release here once you have one you trust; "current" is the latest stable.
+  CROSSPLANE_VERSION: current
+  # The catalog's sdlc-governance ref; a catalog change merges there first.
+  VRIXEL_CATALOG_REF: main
+
+jobs:
+  render:
+    name: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the module against the catalog
+        run: |
+          pip install --quiet "pytest==9.2.0" "pyyaml==6.0.3"
+          python3 -m pytest -q tests
+      - name: Install the Crossplane CLI
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/crossplane/crossplane/main/install.sh \
+            | XP_CHANNEL=stable XP_VERSION="$CROSSPLANE_VERSION" sh
+          sudo mv crossplane /usr/local/bin/
+          crossplane version --client
+      - name: Render every Composition
+        run: |
+          mkdir -p out
+          # Newer CLIs: `crossplane composition render --required-resources`; older: `crossplane render --extra-resources`.
+          render() {
+            local xr=$1 comp=$2 xrd=$3; shift 3
+            crossplane composition render "$xr" "$comp" functions.yaml --xrd "$xrd" \
+                --required-resources aws/render/environment-config.yaml "$@" 2>/dev/null \
+              || crossplane render "$xr" "$comp" functions.yaml --xrd "$xrd" \
+                --extra-resources aws/render/environment-config.yaml "$@"
+          }
+          for dir in aws/render/*/; do
+            kind=$(basename "$dir")
+            render "$dir/xr.yaml" "aws/$kind-composition.yaml" "apis/$kind/definition.yaml" > "out/$kind-first.yaml"
+            render "$dir/xr.yaml" "aws/$kind-composition.yaml" "apis/$kind/definition.yaml" \
+              --observed-resources "$dir/observed.yaml" > "out/$kind-later.yaml"
+            echo "$kind: $(grep -c '^kind:' "out/$kind-later.yaml") objects after AWS reports"
+          done
+      - name: Validate against the provider and XRD schemas
+        run: |
+          cat aws/provider.yaml apis/*/definition.yaml > extensions.yaml
+          crossplane beta validate extensions.yaml out/ --skip-success-results
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: rendered
+          path: out/
+          retention-days: 14

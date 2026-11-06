@@ -1,0 +1,17 @@
+# The composed resources as the provider reports them once AWS has finished: pass with
+# --observed-resources to render a later reconcile, where the XR gets its outputs.
+apiVersion: s3.aws.m.upbound.io/v1beta1
+kind: Bucket
+metadata:
+  name: r-field-photos-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: bucket
+status:
+  atProvider:
+    arn: arn:aws:s3:::vx-r-field-photos
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

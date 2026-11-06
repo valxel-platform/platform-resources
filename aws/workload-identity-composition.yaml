@@ -1,0 +1,108 @@
+# Builds a WorkloadIdentity: one component's IAM role, through EKS Pod Identity (VX-19).
+#
+#   Role                    trusted only by EKS Pod Identity for this account, and only for the
+#                           component's ServiceAccount in this namespace (session tags); under the
+#                           platform's permissions boundary; no policies of its own (each resource's
+#                           Composition attaches exactly the access the design gave the component)
+#   PodIdentityAssociation  the component's ServiceAccount in this namespace -> the role
+#
+# The role's name is <namePrefix><component>-<namespace hash>, the name every resource
+# Composition in the same namespace attaches its policy to.
+#
+# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: workload-identity-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: WorkloadIdentity
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+
+            {{- $sa := $xr.spec.service_account | default $xr.spec.component }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix $xr.spec.component $nsHash | trunc 64 }}
+            {{- $roleArn := "" }}
+            {{- with getComposedResource . "role" }}{{- $roleArn = dig "status" "atProvider" "arn" "" . }}{{- end }}
+            {{- $trust := dict "Version" "2012-10-17" "Statement" (list (dict
+                "Effect" "Allow"
+                "Principal" (dict "Service" "pods.eks.amazonaws.com")
+                "Action" (list "sts:AssumeRole" "sts:TagSession")
+                "Condition" (dict "StringEquals" (dict
+                  "aws:SourceAccount" $env.accountId
+                  "aws:RequestTag/kubernetes-namespace" $xr.metadata.namespace
+                  "aws:RequestTag/kubernetes-service-account" $sa)))) }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "role" }}
+                crossplane.io/external-name: {{ $role | quote }}
+            spec:
+              forProvider:
+                assumeRolePolicy: {{ $trust | toJson | quote }}
+                permissionsBoundary: {{ $env.permissionsBoundaryArn | quote }}
+                maxSessionDuration: 3600
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: eks.aws.m.upbound.io/v1beta1
+            kind: PodIdentityAssociation
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "association" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                clusterName: {{ $env.clusterName | quote }}
+                namespace: {{ $xr.metadata.namespace | quote }}
+                serviceAccount: {{ $sa | quote }}
+                roleArnRef:
+                  name: {{ $xr.metadata.name }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $roleArn }}
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: WorkloadIdentity
+            status:
+              roleArn: {{ $roleArn | quote }}
+              roleName: {{ $role | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

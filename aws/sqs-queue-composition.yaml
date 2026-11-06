@@ -1,0 +1,159 @@
+# Builds an SqsQueue as an Amazon SQS queue with a dead-letter queue (constitution VX-19).
+#
+#   Queue        the dead-letter queue (14 days' retention), then the queue, which moves a message
+#                there after max_receives; both encrypted with the product's KMS key
+#   MetricAlarm  when the data plane has an alarm topic: any message in the dead-letter queue
+#   RolePolicy   one per consumer on its workload-identity role: the design's actions on the
+#                queue, plus the KMS key through SQS only
+#
+# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: sqs-queue-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: SqsQueue
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 70 }}{{- $base = printf "%s-%s" ($base | trunc 61 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- $suffix := ternary ".fifo" "" $xr.spec.fifo }}
+            {{- $name := printf "%s%s" $base $suffix }}
+            {{- $dlqName := printf "%s-dlq%s" $base $suffix }}
+            {{- $arn := "" }}{{- $url := "" }}{{- $dlqArn := "" }}
+            {{- with getComposedResource . "queue" }}{{- $arn = dig "status" "atProvider" "arn" "" . }}{{- $url = dig "status" "atProvider" "url" "" . }}{{- end }}
+            {{- with getComposedResource . "dead-letters" }}{{- $dlqArn = dig "status" "atProvider" "arn" "" . }}{{- end }}
+            ---
+            apiVersion: sqs.aws.m.upbound.io/v1beta1
+            kind: Queue
+            metadata:
+              name: {{ printf "%s-dlq" $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letters" }}
+                crossplane.io/external-name: {{ $dlqName | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                name: {{ $dlqName | quote }}
+                fifoQueue: {{ $xr.spec.fifo }}
+                messageRetentionSeconds: 1209600
+                kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $dlqArn }}
+            ---
+            apiVersion: sqs.aws.m.upbound.io/v1beta1
+            kind: Queue
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "queue" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                name: {{ $name | quote }}
+                fifoQueue: {{ $xr.spec.fifo }}
+                visibilityTimeoutSeconds: {{ $xr.spec.visibility_timeout_s }}
+                kmsMasterKeyId: {{ $env.kmsKeyArn | quote }}
+                redrivePolicy: {{ dict "deadLetterTargetArn" $dlqArn "maxReceiveCount" $xr.spec.max_receives | toJson | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- if $env.alarmTopicArn }}
+            ---
+            apiVersion: cloudwatch.aws.m.upbound.io/v1beta1
+            kind: MetricAlarm
+            metadata:
+              name: {{ printf "%s-dlq-alarm" $xr.metadata.name | trunc 63 }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letter-alarm" }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                alarmDescription: {{ printf "Messages in %s's dead-letter queue" $name | quote }}
+                namespace: AWS/SQS
+                metricName: ApproximateNumberOfMessagesVisible
+                dimensions:
+                  QueueName: {{ $dlqName | quote }}
+                statistic: Maximum
+                period: 300
+                evaluationPeriods: 1
+                threshold: 0
+                comparisonOperator: GreaterThanThreshold
+                treatMissingData: notBreaching
+                alarmActions: [{{ $env.alarmTopicArn | quote }}]
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- if $arn }}
+            {{- range $xr.spec.consumers }}
+            {{- if .actions }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix .component $nsHash | trunc 64 }}
+            {{- $onIt := dict "Sid" "Resource" "Effect" "Allow" "Action" .actions "Resource" (list $arn) }}
+            {{- $kms := list "kms:Decrypt" }}
+            {{- if has "write" (default (list) .access) }}{{- $kms = append $kms "kms:GenerateDataKey" }}{{- end }}
+            {{- $via := dict "StringEquals" (dict "kms:ViaService" (printf "sqs.%s.amazonaws.com" $env.region)) }}
+            {{- $onKey := dict "Sid" "Key" "Effect" "Allow" "Action" $kms "Resource" $env.kmsKeyArn "Condition" $via }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s" .component) }}
+            spec:
+              forProvider:
+                role: {{ $role | quote }}
+                policy: {{ dict "Version" "2012-10-17" "Statement" (list $onIt $onKey) | toJson | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if and $arn $url }}
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: SqsQueue
+            status:
+              url: {{ $url | quote }}
+              arn: {{ $arn | quote }}
+              deadLetterArn: {{ $dlqArn | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

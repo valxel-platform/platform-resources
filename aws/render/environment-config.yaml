@@ -1,0 +1,16 @@
+# A filled-in vrixel-aws EnvironmentConfig for rendering the Compositions.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: vrixel-aws
+data:
+  accountId: '111111111111'
+  region: us-east-2
+  clusterName: agtech-development
+  namePrefix: vx-
+  kmsKeyArn: arn:aws:kms:us-east-2:111111111111:key/0b5c-example
+  permissionsBoundaryArn: arn:aws:iam::111111111111:policy/vrixel-workload-boundary
+  alarmTopicArn: arn:aws:sns:us-east-2:111111111111:vx-platform-alarms
+  accessLogBucket: vx-access-logs-111111111111
+  tags:
+    vrixel:managed-by: crossplane

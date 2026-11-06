@@ -1,0 +1,164 @@
+# Builds a DynamoTable as an Amazon DynamoDB table (constitution VX-19).
+#
+# For each DynamoTable, in its own namespace:
+#   Table        on-demand (small, medium) or provisioned with auto scaling left to the product
+#                (large starts at 50/50); encrypted with the product's KMS key; point-in-time
+#                recovery; deletion protection on; kept in AWS if the Kubernetes object goes
+#                (deletionPolicy Orphan)
+#   RolePolicy   one per consumer, on the consumer's workload-identity role: exactly the actions
+#                the design gave it, on this table and its indexes, plus the KMS key through
+#                DynamoDB only
+#
+# Settings come from the data plane's vrixel-aws EnvironmentConfig. The partition and sort keys
+# never change after creation: the SDLC's design check refuses it, and DynamoDB can't.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: dynamodb-table-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: DynamoTable
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+
+            {{- /* Table names: 3-255 of letters, digits, _ . and -; unique per account and
+                   region. The XR name covers the Resource and the environment; the namespace
+                   hash covers the OpenChoreo project. A table that exists keeps its name. */}}
+            {{- $tableName := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- with getComposedResource . "table" }}
+            {{- with dig "metadata" "annotations" "crossplane.io/external-name" "" . }}
+            {{- $tableName = . }}
+            {{- end }}
+            {{- end }}
+
+            {{- $keys := dict $xr.spec.partition_key "S" }}
+            {{- if $xr.spec.sort_key }}{{- $_ := set $keys $xr.spec.sort_key "S" }}{{- end }}
+            {{- range $xr.spec.indexes }}
+            {{- $parts := splitList ":" . }}
+            {{- $_ := set $keys (index $parts 1) "S" }}
+            {{- if eq (len $parts) 3 }}{{- $_ := set $keys (index $parts 2) "S" }}{{- end }}
+            {{- end }}
+            {{- $provisioned := eq $xr.spec.size "large" }}
+
+            {{- $arn := "" }}
+            {{- with getComposedResource . "table" }}
+            {{- $arn = dig "status" "atProvider" "arn" "" . }}
+            {{- end }}
+            ---
+            apiVersion: dynamodb.aws.m.upbound.io/v1beta1
+            kind: Table
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "table" }}
+                crossplane.io/external-name: {{ $tableName | quote }}
+            spec:
+              deletionPolicy: Orphan
+              forProvider:
+                region: {{ $env.region | quote }}
+                hashKey: {{ $xr.spec.partition_key | quote }}
+                {{- if $xr.spec.sort_key }}
+                rangeKey: {{ $xr.spec.sort_key | quote }}
+                {{- end }}
+                attribute:
+                  {{- range $name, $type := $keys }}
+                  - name: {{ $name | quote }}
+                    type: {{ $type }}
+                  {{- end }}
+                {{- if $provisioned }}
+                billingMode: PROVISIONED
+                readCapacity: 50
+                writeCapacity: 50
+                {{- else }}
+                billingMode: PAY_PER_REQUEST
+                {{- end }}
+                {{- with $xr.spec.indexes }}
+                globalSecondaryIndex:
+                  {{- range . }}
+                  {{- $parts := splitList ":" . }}
+                  - name: {{ index $parts 0 | quote }}
+                    hashKey: {{ index $parts 1 | quote }}
+                    {{- if eq (len $parts) 3 }}
+                    rangeKey: {{ index $parts 2 | quote }}
+                    {{- end }}
+                    projectionType: ALL
+                    {{- if $provisioned }}
+                    readCapacity: 50
+                    writeCapacity: 50
+                    {{- end }}
+                  {{- end }}
+                {{- end }}
+                {{- if $xr.spec.ttl_attribute }}
+                ttl:
+                  - attributeName: {{ $xr.spec.ttl_attribute | quote }}
+                    enabled: true
+                {{- end }}
+                serverSideEncryption:
+                  - enabled: true
+                    kmsKeyArn: {{ $env.kmsKeyArn | quote }}
+                pointInTimeRecovery:
+                  - enabled: true
+                deletionProtectionEnabled: true
+                tags:
+                  {{- range $k, $v := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+
+            {{- if $arn }}
+            {{- range $xr.spec.consumers }}
+            {{- if .actions }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix .component $nsHash | trunc 64 }}
+            {{- $kms := list "kms:Decrypt" }}
+            {{- if has "write" (default (list) .access) }}{{- $kms = append $kms "kms:GenerateDataKey" }}{{- end }}
+            {{- $onTable := dict "Sid" "Table" "Effect" "Allow" "Action" .actions "Resource" (list $arn (printf "%s/index/*" $arn)) }}
+            {{- $via := dict "StringEquals" (dict "kms:ViaService" (printf "dynamodb.%s.amazonaws.com" $env.region)) }}
+            {{- $onKey := dict "Sid" "Key" "Effect" "Allow" "Action" $kms "Resource" $env.kmsKeyArn "Condition" $via }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s" .component) }}
+            spec:
+              forProvider:
+                role: {{ $role | quote }}
+                policy: {{ dict "Version" "2012-10-17" "Statement" (list $onTable $onKey) | toJson | quote }}
+            {{- end }}
+            {{- end }}
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: DynamoTable
+            status:
+              tableName: {{ $tableName | quote }}
+              arn: {{ $arn | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

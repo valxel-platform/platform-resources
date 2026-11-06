@@ -1,0 +1,35 @@
+# The composed resources as the provider reports them once AWS has finished: pass with
+# --observed-resources to render a later reconcile, where the XR gets its outputs.
+apiVersion: sqs.aws.m.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: r-jobs-development-1a2b3c4d-dlq
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: dead-letters
+status:
+  atProvider:
+    arn: arn:aws:sqs:us-east-2:111111111111:vx-jobs-dlq.fifo
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'
+
+---
+apiVersion: sqs.aws.m.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: r-jobs-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: queue
+status:
+  atProvider:
+    arn: arn:aws:sqs:us-east-2:111111111111:vx-jobs.fifo
+    url: https://sqs.us-east-2.amazonaws.com/111111111111/vx-jobs.fifo
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

@@ -1,0 +1,17 @@
+# The composed resources as the provider reports them once AWS has finished: pass with
+# --observed-resources to render a later reconcile, where the XR gets its outputs.
+apiVersion: kinesis.aws.m.upbound.io/v1beta1
+kind: Stream
+metadata:
+  name: r-readings-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: stream
+status:
+  atProvider:
+    arn: arn:aws:kinesis:us-east-2:111111111111:stream/vx-readings
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

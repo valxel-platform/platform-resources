@@ -1,0 +1,29 @@
+# This data plane's AWS settings, read by every Composition here: one data plane per product
+# environment, each in its own AWS account (constitution VX-19). Fill in when the platform team
+# sets up the environment; the SDLC tool never changes this file.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: vrixel-aws
+data:
+  # The environment's account and region (product.yaml runtime.aws).
+  accountId: "<account-id>"
+  region: <region>
+  # The EKS cluster the data plane runs on, for Pod Identity associations.
+  clusterName: <eks-cluster>
+  # Prepended to every AWS resource name, so these never collide with resources made by hand.
+  namePrefix: vx-
+  # The product's customer-managed KMS key in this account: every table, stream, queue, bucket
+  # and topic is encrypted with it, and components get Decrypt/GenerateDataKey only through the
+  # service they were given (kms:ViaService).
+  kmsKeyArn: arn:aws:kms:<region>:<account-id>:key/<key-id>
+  # Every role a workload identity creates gets this boundary: no access outside the product's
+  # resources, whatever a policy says.
+  permissionsBoundaryArn: arn:aws:iam::<account-id>:policy/vrixel-workload-boundary
+  # Optional: an SNS topic for alarms (dead-letter queues). Empty: no alarms.
+  alarmTopicArn: ""
+  # Optional: a bucket for S3 access logs. Empty: no access logs.
+  accessLogBucket: ""
+  # Tags on every resource, on top of the product, feature and data class tags each carries.
+  tags:
+    vrixel:managed-by: crossplane

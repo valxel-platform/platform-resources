@@ -1,0 +1,77 @@
+# The SqsQueue API: An Amazon SQS queue with its dead-letter queue. The sqs-queue ClusterResourceType creates one in the cell namespace of
+# each environment it is bound to; aws/sqs-queue-composition.yaml builds it. Install on every data plane.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: sqsqueues.aws.platform.vrixel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.vrixel.dev
+  names:
+    kind: SqsQueue
+    plural: sqsqueues
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                fifo:
+                  type: boolean
+                  description: First in, first out per message group. Never changes.
+                  default: false
+                visibility_timeout_s:
+                  type: integer
+                  description: Seconds a received message stays hidden before it is retried.
+                  minimum: 0
+                  maximum: 43200
+                  default: 60
+                max_receives:
+                  type: integer
+                  description: Receives before a message moves to the dead-letter queue.
+                  minimum: 1
+                  maximum: 1000
+                  default: 5
+                consumers:
+                  type: array
+                  description: >-
+                    The components that use it and the IAM actions each may take on it, from the
+                    platform catalog's access (written by the SDLC tool from the approved design).
+                  default: []
+                  items:
+                    type: object
+                    required: [component, actions]
+                    properties:
+                      component:
+                        type: string
+                        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                      access:
+                        type: array
+                        items: {type: string, enum: [read, write, delete]}
+                      actions:
+                        type: array
+                        items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+                tags:
+                  type: object
+                  description: Tags for the AWS resources (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; the Composition maps it to capacity.
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                url:
+                  type: string
+                arn:
+                  type: string
+                deadLetterArn:
+                  type: string

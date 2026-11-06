@@ -1,0 +1,17 @@
+# The composed resources as the provider reports them once AWS has finished: pass with
+# --observed-resources to render a later reconcile, where the XR gets its outputs.
+apiVersion: dynamodb.aws.m.upbound.io/v1beta1
+kind: Table
+metadata:
+  name: r-field-state-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: table
+status:
+  atProvider:
+    arn: arn:aws:dynamodb:us-east-2:111111111111:table/vx-r-field-state-development-1a2b3c4d-9f3c2a1b
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

@@ -1,0 +1,93 @@
+# An Amazon SQS queue with its dead-letter queue, as an OpenChoreo ClusterResourceType (constitution VX-19). Apply on the control plane.
+# The parameters are what a design's Resources line sets (the SDLC tool fills consumers and tags);
+# environmentConfigs.size is set per environment by the binding. It renders one SqsQueue into the
+# cell namespace; the data plane's Composition builds it in that environment's AWS account.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: sqs-queue
+  annotations:
+    openchoreo.dev/description: >-
+      An Amazon SQS queue with its dead-letter queue, built by the Vrixel platform's Crossplane Composition with encryption, private
+      access and least-privilege IAM.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      properties:
+        fifo:
+          type: boolean
+          description: First in, first out per message group. Never changes.
+          default: false
+        visibility_timeout_s:
+          type: integer
+          description: Seconds a received message stays hidden before it is retried.
+          minimum: 0
+          maximum: 43200
+          default: 60
+        max_receives:
+          type: integer
+          description: Receives before a message moves to the dead-letter queue.
+          minimum: 1
+          maximum: 1000
+          default: 5
+        consumers:
+          type: array
+          description: >-
+            The components that use it and the IAM actions each may take on it, from the
+            platform catalog's access (written by the SDLC tool from the approved design).
+          default: []
+          items:
+            type: object
+            required: [component, actions]
+            properties:
+              component:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+              access:
+                type: array
+                items: {type: string, enum: [read, write, delete]}
+              actions:
+                type: array
+                items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+        tags:
+          type: object
+          description: Tags for the AWS resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Nothing stored that outlives it.
+  retainPolicy: Delete
+
+  outputs:
+    - name: url
+      value: ${applied.instance.status.url}
+    - name: arn
+      value: ${applied.instance.status.arn}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.url) && has(applied.instance.status.arn)}"
+      template:
+        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        kind: SqsQueue
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          fifo: ${parameters.fifo}
+          visibility_timeout_s: ${parameters.visibility_timeout_s}
+          max_receives: ${parameters.max_receives}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

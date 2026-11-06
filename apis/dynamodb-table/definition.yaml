@@ -1,0 +1,79 @@
+# The DynamoTable API: An Amazon DynamoDB table. The dynamodb-table ClusterResourceType creates one in the cell namespace of
+# each environment it is bound to; aws/dynamodb-table-composition.yaml builds it. Install on every data plane.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: dynamotables.aws.platform.vrixel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.vrixel.dev
+  names:
+    kind: DynamoTable
+    plural: dynamotables
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [partition_key]
+              properties:
+                partition_key:
+                  type: string
+                  description: Attribute name of the partition (hash) key, a string. Never changes.
+                  pattern: "^[A-Za-z_][A-Za-z0-9_.-]{0,254}$"
+                sort_key:
+                  type: string
+                  description: Attribute name of the sort (range) key, a string; empty for none. Never changes.
+                  default: ""
+                ttl_attribute:
+                  type: string
+                  description: Attribute holding an expiry time (epoch seconds); empty for none.
+                  default: ""
+                indexes:
+                  type: array
+                  description: "Global secondary indexes, each name:partition_key[:sort_key] (string keys)."
+                  default: []
+                  items:
+                    type: string
+                    pattern: "^[A-Za-z0-9_.-]{3,255}:[A-Za-z_][A-Za-z0-9_.-]*(:[A-Za-z_][A-Za-z0-9_.-]*)?$"
+                consumers:
+                  type: array
+                  description: >-
+                    The components that use it and the IAM actions each may take on it, from the
+                    platform catalog's access (written by the SDLC tool from the approved design).
+                  default: []
+                  items:
+                    type: object
+                    required: [component, actions]
+                    properties:
+                      component:
+                        type: string
+                        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                      access:
+                        type: array
+                        items: {type: string, enum: [read, write, delete]}
+                      actions:
+                        type: array
+                        items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+                tags:
+                  type: object
+                  description: Tags for the AWS resources (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; the Composition maps it to capacity.
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                tableName:
+                  type: string
+                arn:
+                  type: string

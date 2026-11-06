@@ -1,0 +1,114 @@
+# Builds a KinesisStream as an Amazon Kinesis data stream (constitution VX-19).
+#
+#   Stream       one shard (small) or on-demand (medium, large); encrypted with the product's KMS
+#                key; kept in AWS if the Kubernetes object goes (deletionPolicy Orphan)
+#   RolePolicy   one per consumer on its workload-identity role: the design's actions on this
+#                stream and its enhanced fan-out consumers, plus the KMS key through Kinesis only
+#
+# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: kinesis-stream-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    kind: KinesisStream
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: vrixel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+
+            {{- $name := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $name = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $name) "-") "-" }}
+            {{- if gt (len $name) 128 }}{{- $name = printf "%s-%s" ($name | trunc 119 | trimSuffix "-") ($name | sha256sum | trunc 8) }}{{- end }}
+            {{- with getComposedResource . "stream" }}
+            {{- with dig "metadata" "annotations" "crossplane.io/external-name" "" . }}{{- $name = . }}{{- end }}
+            {{- end }}
+            {{- $arn := "" }}
+            {{- with getComposedResource . "stream" }}{{- $arn = dig "status" "atProvider" "arn" "" . }}{{- end }}
+            ---
+            apiVersion: kinesis.aws.m.upbound.io/v1beta1
+            kind: Stream
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "stream" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              deletionPolicy: Orphan
+              forProvider:
+                region: {{ $env.region | quote }}
+                retentionPeriod: {{ $xr.spec.retention_hours }}
+                {{- if eq $xr.spec.size "small" }}
+                shardCount: 1
+                streamModeDetails:
+                  - streamMode: PROVISIONED
+                {{- else }}
+                streamModeDetails:
+                  - streamMode: ON_DEMAND
+                {{- end }}
+                encryptionType: KMS
+                kmsKeyId: {{ $env.kmsKeyArn | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $arn }}
+            {{- range $xr.spec.consumers }}
+            {{- if .actions }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix .component $nsHash | trunc 64 }}
+            {{- $onIt := dict "Sid" "Resource" "Effect" "Allow" "Action" .actions "Resource" (list $arn (printf "%s/consumer/*" $arn)) }}
+            {{- $kms := list "kms:Decrypt" }}
+            {{- if has "write" (default (list) .access) }}{{- $kms = append $kms "kms:GenerateDataKey" }}{{- end }}
+            {{- $via := dict "StringEquals" (dict "kms:ViaService" (printf "kinesis.%s.amazonaws.com" $env.region)) }}
+            {{- $onKey := dict "Sid" "Key" "Effect" "Allow" "Action" $kms "Resource" $env.kmsKeyArn "Condition" $via }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s" .component) }}
+            spec:
+              forProvider:
+                role: {{ $role | quote }}
+                policy: {{ dict "Version" "2012-10-17" "Statement" (list $onIt $onKey) | toJson | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $arn }}
+            ---
+            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            kind: KinesisStream
+            status:
+              streamName: {{ $name | quote }}
+              arn: {{ $arn | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

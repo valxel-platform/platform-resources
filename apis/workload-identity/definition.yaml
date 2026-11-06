@@ -1,0 +1,49 @@
+# The WorkloadIdentity API: An IAM role for one component, through EKS Pod Identity. The workload-identity ClusterResourceType creates one in the cell namespace of
+# each environment it is bound to; aws/workload-identity-composition.yaml builds it. Install on every data plane.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: workloadidentities.aws.platform.vrixel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.vrixel.dev
+  names:
+    kind: WorkloadIdentity
+    plural: workloadidentities
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [component]
+              properties:
+                component:
+                  type: string
+                  description: The OpenChoreo component this identity is for.
+                  pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                service_account:
+                  type: string
+                  description: The component's Kubernetes ServiceAccount; empty means the component's name.
+                  default: ""
+                tags:
+                  type: object
+                  description: Tags for the AWS resources (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; the Composition maps it to capacity.
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                roleArn:
+                  type: string
+                roleName:
+                  type: string

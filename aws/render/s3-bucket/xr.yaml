@@ -1,0 +1,24 @@
+# A S3Bucket as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition).
+apiVersion: aws.platform.vrixel.dev/v1alpha1
+kind: S3Bucket
+metadata:
+  name: r-field-photos-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  versioning: true
+  expire_days: 365
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - s3:GetObject
+    - s3:ListBucket
+    - s3:PutObject
+  tags:
+    vrixel:product: AG
+    vrixel:feature: AG-FEAT-7
+    vrixel:data-class: general
+  size: small

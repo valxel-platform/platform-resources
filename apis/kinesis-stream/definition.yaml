@@ -1,0 +1,65 @@
+# The KinesisStream API: An Amazon Kinesis data stream. The kinesis-stream ClusterResourceType creates one in the cell namespace of
+# each environment it is bound to; aws/kinesis-stream-composition.yaml builds it. Install on every data plane.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: kinesisstreams.aws.platform.vrixel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.vrixel.dev
+  names:
+    kind: KinesisStream
+    plural: kinesisstreams
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                retention_hours:
+                  type: integer
+                  description: How long records stay readable, in hours.
+                  minimum: 24
+                  maximum: 8760
+                  default: 24
+                consumers:
+                  type: array
+                  description: >-
+                    The components that use it and the IAM actions each may take on it, from the
+                    platform catalog's access (written by the SDLC tool from the approved design).
+                  default: []
+                  items:
+                    type: object
+                    required: [component, actions]
+                    properties:
+                      component:
+                        type: string
+                        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                      access:
+                        type: array
+                        items: {type: string, enum: [read, write, delete]}
+                      actions:
+                        type: array
+                        items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+                tags:
+                  type: object
+                  description: Tags for the AWS resources (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; the Composition maps it to capacity.
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                streamName:
+                  type: string
+                arn:
+                  type: string
