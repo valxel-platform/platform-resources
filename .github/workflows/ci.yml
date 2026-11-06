@@ -61,12 +61,23 @@ jobs:
           done
       - name: Validate against the provider and XRD schemas
         run: |
-          cat aws/provider.yaml apis/*/definition.yaml > extensions.yaml
+          # One YAML stream: each file's documents, separated.
+          for f in aws/provider.yaml apis/*/definition.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
+          # Validate what the Compositions compose. The XRs are this module's own inputs; the
+          # tests check them against the XRDs and the catalog.
+          python3 - <<'PY'
+          import glob, os, yaml
+          os.makedirs("composed", exist_ok=True)
+          for path in glob.glob("out/*.yaml"):
+              docs = [d for d in yaml.safe_load_all(open(path)) if d and not d.get("apiVersion", "").startswith("aws.platform.vrixel.dev/")]
+              with open(os.path.join("composed", os.path.basename(path)), "w") as f:
+                  yaml.safe_dump_all(docs, f, sort_keys=False)
+          PY
           # The CLI moved validate under `resource`; older ones have it under `beta`.
           if crossplane resource validate --help >/dev/null 2>&1; then
-            crossplane resource validate extensions.yaml out/ --skip-success-results
+            crossplane resource validate extensions.yaml composed/ --skip-success-results
           else
-            crossplane beta validate extensions.yaml out/ --skip-success-results
+            crossplane beta validate extensions.yaml composed/ --skip-success-results
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
