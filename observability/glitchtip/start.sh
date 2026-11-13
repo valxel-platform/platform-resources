@@ -1,5 +1,5 @@
 #!/bin/sh
-# Starts GlitchTip in an OpenChoreo component. Mounted at /vrixel/start.sh by the Workload.
+# Starts GlitchTip in an OpenChoreo component. Mounted at /valxel/start.sh by the Workload.
 #
 # The database Resource gives host, port, name, user and password as separate variables (DB_*);
 # GlitchTip reads one DATABASE_URL, so it is built here, with the user and password URL-encoded and

@@ -3,10 +3,10 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: sqsqueues.aws.platform.vrixel.dev
+  name: sqsqueues.aws.platform.valxel.dev
 spec:
   scope: Namespaced
-  group: aws.platform.vrixel.dev
+  group: aws.platform.valxel.dev
   names:
     kind: SqsQueue
     plural: sqsqueues

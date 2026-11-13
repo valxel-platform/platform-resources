@@ -3,10 +3,10 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: s3buckets.aws.platform.vrixel.dev
+  name: s3buckets.aws.platform.valxel.dev
 spec:
   scope: Namespaced
-  group: aws.platform.vrixel.dev
+  group: aws.platform.valxel.dev
   names:
     kind: S3Bucket
     plural: s3buckets

@@ -30,8 +30,8 @@ Both run `glitchtip/glitchtip` (pinned in `render.py`) through `start.sh`, which
 2. Render and apply, then promote the components to staging and production like any other:
 
    ```bash
-   python3 observability/glitchtip/render.py --project apx --domain errors.apx.vrixel.dev \
-     --from-email errors@apx.vrixel.dev --environments dev,staging,production | kubectl apply -f -
+   python3 observability/glitchtip/render.py --project apx --domain errors.apx.valxel.dev \
+     --from-email errors@apx.valxel.dev --environments dev,staging,production | kubectl apply -f -
    ```
 
 3. Point the domain at the `glitchtip` endpoint, and create the first admin (sign-up is off):
@@ -43,9 +43,9 @@ Both run `glitchtip/glitchtip` (pinned in `render.py`) through `start.sh`, which
 
 5. Alerts to the SDLC tool: in each project, an alert with a webhook recipient
    `https://<tool>/api/signals/glitchtip/<PRODUCT ID>?token=<token>` (the tool shows the token for
-   the product: `vrixel glitchtip-token <PRODUCT ID>`). For the tool to read an issue's trace id and
+   the product: `valxel glitchtip-token <PRODUCT ID>`). For the tool to read an issue's trace id and
    tie it to other components' failures, create an API token with `event:read` and give it to the
-   tool (`VRIXEL_GLITCHTIP_TOKENS`, see the tool's README).
+   tool (`VALXEL_GLITCHTIP_TOKENS`, see the tool's README).
 
 ## Running it
 

@@ -11,14 +11,14 @@
 #   RolePolicy                               one per consumer: the design's actions on the bucket
 #                                            and its objects, plus the KMS key through S3 only
 #
-# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+# Settings come from the data plane's valxel-aws EnvironmentConfig.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
   name: s3-bucket-aws
 spec:
   compositeTypeRef:
-    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    apiVersion: aws.platform.valxel.dev/v1alpha1
     kind: S3Bucket
   mode: Pipeline
   pipeline:
@@ -32,7 +32,7 @@ spec:
           environmentConfigs:
             - type: Reference
               ref:
-                name: vrixel-aws
+                name: valxel-aws
 
     - step: render
       functionRef:
@@ -214,7 +214,7 @@ spec:
             {{- end }}
             {{- if $arn }}
             ---
-            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            apiVersion: aws.platform.valxel.dev/v1alpha1
             kind: S3Bucket
             status:
               bucketName: {{ $name | quote }}

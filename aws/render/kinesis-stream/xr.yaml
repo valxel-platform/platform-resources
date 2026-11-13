@@ -1,6 +1,6 @@
 # A KinesisStream as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
 # (see README, Checking a Composition).
-apiVersion: aws.platform.vrixel.dev/v1alpha1
+apiVersion: aws.platform.valxel.dev/v1alpha1
 kind: KinesisStream
 metadata:
   name: r-readings-development-1a2b3c4d
@@ -21,7 +21,7 @@ spec:
     - kinesis:GetRecords
     - kinesis:GetShardIterator
   tags:
-    vrixel:product: AG
-    vrixel:feature: AG-FEAT-7
-    vrixel:data-class: general
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
   size: medium

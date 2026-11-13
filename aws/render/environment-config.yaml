@@ -1,8 +1,8 @@
-# A filled-in vrixel-aws EnvironmentConfig for rendering the Compositions.
+# A filled-in valxel-aws EnvironmentConfig for rendering the Compositions.
 apiVersion: apiextensions.crossplane.io/v1beta1
 kind: EnvironmentConfig
 metadata:
-  name: vrixel-aws
+  name: valxel-aws
 data:
   accountId: '111111111111'
   region: us-east-2
@@ -11,8 +11,8 @@ data:
   environment: development
   namePrefix: vx-
   kmsKeyArn: arn:aws:kms:us-east-2:111111111111:key/0b5c-example
-  permissionsBoundaryArn: arn:aws:iam::111111111111:policy/vrixel-workload-boundary
+  permissionsBoundaryArn: arn:aws:iam::111111111111:policy/valxel-workload-boundary
   alarmTopicArn: arn:aws:sns:us-east-2:111111111111:vx-platform-alarms
   accessLogBucket: vx-access-logs-111111111111
   tags:
-    vrixel:managed-by: crossplane
+    valxel:managed-by: crossplane

@@ -3,10 +3,10 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: kinesisstreams.aws.platform.vrixel.dev
+  name: kinesisstreams.aws.platform.valxel.dev
 spec:
   scope: Namespaced
-  group: aws.platform.vrixel.dev
+  group: aws.platform.valxel.dev
   names:
     kind: KinesisStream
     plural: kinesisstreams

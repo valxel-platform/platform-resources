@@ -9,14 +9,14 @@
 # The role's name is <namePrefix><component>-<namespace hash>, the name every resource
 # Composition in the same namespace attaches its policy to.
 #
-# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+# Settings come from the data plane's valxel-aws EnvironmentConfig.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
   name: workload-identity-aws
 spec:
   compositeTypeRef:
-    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    apiVersion: aws.platform.valxel.dev/v1alpha1
     kind: WorkloadIdentity
   mode: Pipeline
   pipeline:
@@ -30,7 +30,7 @@ spec:
           environmentConfigs:
             - type: Reference
               ref:
-                name: vrixel-aws
+                name: valxel-aws
 
     - step: render
       functionRef:
@@ -96,7 +96,7 @@ spec:
                   {{- end }}
             {{- if $roleArn }}
             ---
-            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            apiVersion: aws.platform.valxel.dev/v1alpha1
             kind: WorkloadIdentity
             status:
               roleArn: {{ $roleArn | quote }}

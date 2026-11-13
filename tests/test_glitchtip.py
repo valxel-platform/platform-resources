@@ -14,7 +14,7 @@ import render  # noqa: E402
 
 
 def docs():
-    return render.render("emr", "errors.emr.vrixel.dev", "errors@emr.vrixel.dev", ["dev", "staging", "production"])
+    return render.render("emr", "errors.emr.valxel.dev", "errors@emr.valxel.dev", ["dev", "staging", "production"])
 
 
 def test_one_glitchtip_per_product_with_its_database_kept():
@@ -34,7 +34,7 @@ def test_one_glitchtip_per_product_with_its_database_kept():
 def test_web_and_worker_share_settings_and_secrets_stay_out():
     web, worker = (x for x in docs() if x["kind"] == "Workload")
     env = {e["key"]: e for e in web["spec"]["container"]["env"]}
-    assert env["SERVER_ROLE"]["value"] == "web" and env["GLITCHTIP_DOMAIN"]["value"] == "https://errors.emr.vrixel.dev"
+    assert env["SERVER_ROLE"]["value"] == "web" and env["GLITCHTIP_DOMAIN"]["value"] == "https://errors.emr.valxel.dev"
     assert env["ENABLE_USER_REGISTRATION"]["value"] == "false"
     assert env["SECRET_KEY"]["valueFrom"]["secretKeyRef"] == {"name": "glitchtip", "key": "secret-key"}
     assert "value" not in env["EMAIL_URL"]
@@ -43,14 +43,14 @@ def test_web_and_worker_share_settings_and_secrets_stay_out():
     assert {e["key"]: e.get("value") for e in worker["spec"]["container"]["env"]}["SERVER_ROLE"] == "worker"
     for w in (web, worker):
         c = w["spec"]["container"]
-        assert c["image"].startswith("glitchtip/glitchtip:v6.") and c["command"] == ["sh", "/vrixel/start.sh"]
-        assert c["files"][0]["mountPath"] == "/vrixel" and "exec ./bin/start.sh" in c["files"][0]["value"]
+        assert c["image"].startswith("glitchtip/glitchtip:v6.") and c["command"] == ["sh", "/valxel/start.sh"]
+        assert c["files"][0]["mountPath"] == "/valxel" and "exec ./bin/start.sh" in c["files"][0]["value"]
         assert w["spec"]["dependencies"]["resources"][0]["envBindings"]["password"] == "DB_PASSWORD"
 
 
 @pytest.mark.parametrize("bad", [{"project": "EMR"}, {"domain": "not a host"}])
 def test_bad_names_are_refused(bad):
-    args = {"project": "emr", "domain": "errors.emr.vrixel.dev"} | bad
+    args = {"project": "emr", "domain": "errors.emr.valxel.dev"} | bad
     with pytest.raises(ValueError):
         render.render(args["project"], args["domain"], "e@x.dev", ["production"])
 
@@ -78,7 +78,7 @@ def test_the_start_script_builds_the_database_url(tmp_path):
 
 def test_the_command_line_writes_yaml():
     out = subprocess.run([sys.executable, str(ROOT / "observability" / "glitchtip" / "render.py"), "--project", "apx",
-                          "--domain", "errors.apx.vrixel.dev", "--from-email", "e@apx.vrixel.dev",
+                          "--domain", "errors.apx.valxel.dev", "--from-email", "e@apx.valxel.dev",
                           "--environments", "production"], check=True, capture_output=True, text=True).stdout
     assert [d["kind"] for d in yaml.safe_load_all(out)].count("Workload") == 2
 

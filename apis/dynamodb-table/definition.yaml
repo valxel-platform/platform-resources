@@ -3,10 +3,10 @@
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: dynamotables.aws.platform.vrixel.dev
+  name: dynamotables.aws.platform.valxel.dev
 spec:
   scope: Namespaced
-  group: aws.platform.vrixel.dev
+  group: aws.platform.valxel.dev
   names:
     kind: DynamoTable
     plural: dynamotables

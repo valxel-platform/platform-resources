@@ -20,7 +20,7 @@ env:
   # Pin a Crossplane CLI release here once you have one you trust; "current" is the latest stable.
   CROSSPLANE_VERSION: current
   # The catalog's sdlc-governance ref; a catalog change merges there first.
-  VRIXEL_CATALOG_REF: main
+  VALXEL_CATALOG_REF: main
 
 jobs:
   render:
@@ -69,7 +69,7 @@ jobs:
           import glob, os, yaml
           os.makedirs("composed", exist_ok=True)
           for path in glob.glob("out/*.yaml"):
-              docs = [d for d in yaml.safe_load_all(open(path)) if d and not d.get("apiVersion", "").startswith("aws.platform.vrixel.dev/")]
+              docs = [d for d in yaml.safe_load_all(open(path)) if d and not d.get("apiVersion", "").startswith("aws.platform.valxel.dev/")]
               with open(os.path.join("composed", os.path.basename(path)), "w") as f:
                   yaml.safe_dump_all(docs, f, sort_keys=False)
           PY

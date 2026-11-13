@@ -6,14 +6,14 @@
 #   RolePolicy   one per consumer on its workload-identity role: the design's actions on the
 #                queue, plus the KMS key through SQS only
 #
-# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+# Settings come from the data plane's valxel-aws EnvironmentConfig.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
   name: sqs-queue-aws
 spec:
   compositeTypeRef:
-    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    apiVersion: aws.platform.valxel.dev/v1alpha1
     kind: SqsQueue
   mode: Pipeline
   pipeline:
@@ -27,7 +27,7 @@ spec:
           environmentConfigs:
             - type: Reference
               ref:
-                name: vrixel-aws
+                name: valxel-aws
 
     - step: render
       functionRef:
@@ -105,9 +105,9 @@ spec:
             {{- /* Each alarm says whose it is on its first line, for the SDLC tool; its state changes reach
                    the tool through the data plane's AlarmRouting (EventBridge), which matches the name prefix. */}}
             {{- $users := list }}{{- range $xr.spec.consumers }}{{- $users = append $users .component }}{{- end }}
-            {{- $who := printf "vrixel product=%s feature=%s resource=%s env=%s consumers=%s"
-                  (index $tags "vrixel:product" | default "-") (index $tags "vrixel:feature" | default "-")
-                  (index $tags "vrixel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "valxel:product" | default "-") (index $tags "valxel:feature" | default "-")
+                  (index $tags "valxel:resource" | default $xr.metadata.name) ($env.environment | default "-")
                   (join "," $users | default "-") }}
             {{- range $alarms }}
             ---
@@ -165,7 +165,7 @@ spec:
             {{- end }}
             {{- if and $arn $url }}
             ---
-            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            apiVersion: aws.platform.valxel.dev/v1alpha1
             kind: SqsQueue
             status:
               url: {{ $url | quote }}

@@ -8,7 +8,7 @@ metadata:
   name: workload-identity
   annotations:
     openchoreo.dev/description: >-
-      An IAM role for one component, through EKS Pod Identity, built by the Vrixel platform's Crossplane Composition with encryption, private
+      An IAM role for one component, through EKS Pod Identity, built by the Valxel platform's Crossplane Composition with encryption, private
       access and least-privilege IAM.
 spec:
   parameters:
@@ -50,7 +50,7 @@ spec:
     - id: instance
       readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.roleArn)}"
       template:
-        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        apiVersion: aws.platform.valxel.dev/v1alpha1
         kind: WorkloadIdentity
         metadata:
           name: ${metadata.name}

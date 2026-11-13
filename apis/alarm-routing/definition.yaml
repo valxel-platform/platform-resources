@@ -1,13 +1,13 @@
-# The AlarmRouting API: sends the state changes of the data plane's Vrixel alarms (those named with
-# the vrixel-aws EnvironmentConfig's namePrefix) to the SDLC tool. One per data plane, created by
+# The AlarmRouting API: sends the state changes of the data plane's Valxel alarms (those named with
+# the valxel-aws EnvironmentConfig's namePrefix) to the SDLC tool. One per data plane, created by
 # the platform team at setup; aws/alarm-routing-composition.yaml builds it. Products never pick it.
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: alarmroutings.aws.platform.vrixel.dev
+  name: alarmroutings.aws.platform.valxel.dev
 spec:
   scope: Namespaced
-  group: aws.platform.vrixel.dev
+  group: aws.platform.valxel.dev
   names:
     kind: AlarmRouting
     plural: alarmroutings
@@ -31,7 +31,7 @@ spec:
                   type: object
                   description: >-
                     The Secret, in this namespace, whose key holds the Authorization header EventBridge
-                    sends: "Bearer " followed by the tool's VRIXEL_SIGNALS_TOKEN.
+                    sends: "Bearer " followed by the tool's VALXEL_SIGNALS_TOKEN.
                   required: [name, key]
                   properties:
                     name: {type: string}

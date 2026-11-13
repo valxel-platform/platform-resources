@@ -1,6 +1,6 @@
 # A SqsQueue as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
 # (see README, Checking a Composition).
-apiVersion: aws.platform.vrixel.dev/v1alpha1
+apiVersion: aws.platform.valxel.dev/v1alpha1
 kind: SqsQueue
 metadata:
   name: r-jobs-development-1a2b3c4d
@@ -17,8 +17,8 @@ spec:
     - sqs:SendMessage
     - sqs:GetQueueAttributes
   tags:
-    vrixel:product: AG
-    vrixel:feature: AG-FEAT-7
-    vrixel:resource: jobs
-    vrixel:data-class: general
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:resource: jobs
+    valxel:data-class: general
   size: small
