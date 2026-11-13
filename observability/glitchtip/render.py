@@ -1,7 +1,7 @@
 """Writes the OpenChoreo resources for one product's GlitchTip (self-hosted error tracking).
 
-    python3 observability/glitchtip/render.py --project emr --domain errors.emr.vrixel.dev \
-        --from-email errors@emr.vrixel.dev --environments dev,staging,production > glitchtip-emr.yaml
+    python3 observability/glitchtip/render.py --project emr --domain errors.emr.valxel.dev \
+        --from-email errors@emr.valxel.dev --environments dev,staging,production > glitchtip-emr.yaml
 
 One GlitchTip per product, in the product's own OpenChoreo project, so it runs in each
 environment's own AWS account and region, next to the data its error reports describe
@@ -58,7 +58,7 @@ def render(project: str, domain: str, from_email: str, environments: list[str], 
             "apiVersion": "openchoreo.dev/v1alpha1", "kind": "Component",
             "metadata": {"name": name, "namespace": namespace,
                          "annotations": {"openchoreo.dev/description":
-                                         "Self-hosted GlitchTip error tracking (Vrixel platform)"}},
+                                         "Self-hosted GlitchTip error tracking (Valxel platform)"}},
             "spec": {"owner": owner, "componentType": {"kind": "ClusterComponentType", "name": "deployment/service"},
                      "autoDeploy": True},
         })
@@ -83,8 +83,8 @@ def render(project: str, domain: str, from_email: str, environments: list[str], 
                 "dependencies": {"resources": [{"ref": "glitchtip-db", "envBindings": {
                     "host": "DB_HOST", "port": "DB_PORT", "database": "DB_NAME", "username": "DB_USER",
                     "password": "DB_PASSWORD"}}]},
-                "container": {"image": IMAGE, "command": ["sh", "/vrixel/start.sh"], "env": env_vars,
-                              "files": [{"key": "start.sh", "mountPath": "/vrixel", "value": start}]},
+                "container": {"image": IMAGE, "command": ["sh", "/valxel/start.sh"], "env": env_vars,
+                              "files": [{"key": "start.sh", "mountPath": "/valxel", "value": start}]},
             },
         }
         if endpoint:
@@ -98,7 +98,7 @@ def render(project: str, domain: str, from_email: str, environments: list[str], 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--project", required=True, help="the product's OpenChoreo project")
-    p.add_argument("--domain", required=True, help="GlitchTip's public host, e.g. errors.emr.vrixel.dev")
+    p.add_argument("--domain", required=True, help="GlitchTip's public host, e.g. errors.emr.valxel.dev")
     p.add_argument("--from-email", required=True)
     p.add_argument("--environments", default="dev,staging,production")
     p.add_argument("--namespace", default="default")

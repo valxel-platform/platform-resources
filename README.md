@@ -1,8 +1,8 @@
-# Platform resources: AWS services for Vrixel products
+# Platform resources: AWS services for Valxel products
 
 The AWS services products may use (constitution VX-19), as OpenChoreo ClusterResourceTypes backed
 by Crossplane Compositions. The list, and what each is for, lives in the platform catalog
-(`vrixel-tools/sdlc-governance`, `platform/aws-resources.yaml`); this repo builds each type in it.
+(`valxel-platform/sdlc-governance`, `platform/aws-resources.yaml`); this repo builds each type in it.
 PostgreSQL and Valkey come from OpenChoreo's own
 [`provisioner-crossplane`](https://github.com/openchoreo/community-modules/tree/main/provisioner-crossplane)
 module, which this one follows in layout and conventions.
@@ -70,7 +70,7 @@ flowchart LR
 ```
 
 - An alarm is named with the data plane's `namePrefix`, and the first line of its description says
-  whose it is: `vrixel product=AG feature=AG-FEAT-7 resource=field-state env=production
+  whose it is: `valxel product=AG feature=AG-FEAT-7 resource=field-state env=production
   consumers=agtech-field-api alarm=write-throttled severity=sev3`. The rest is what on-call reads.
 - One `AlarmRouting` per data plane sends every state change of those alarms to the tool. In
   production a firing alarm opens an incident for the components that use the resource, and its OK
@@ -104,7 +104,7 @@ Each product environment is its own AWS account with an EKS data plane (product.
 6. `aws/environment-config.yaml`, filled in for this account: account, region, EKS cluster, KMS
    key, permissions boundary, optional alarm topic and access-log bucket.
 7. `apis/*/definition.yaml`, `aws/*-composition.yaml` and `cluster-agent-rbac.yaml`.
-8. Alarm routing: a Secret in `crossplane-system` whose key holds `Bearer <VRIXEL_SIGNALS_TOKEN>`,
+8. Alarm routing: a Secret in `crossplane-system` whose key holds `Bearer <VALXEL_SIGNALS_TOKEN>`,
    then an `AlarmRouting` (`aws/render/alarm-routing/xr.yaml` shows one) pointing at the tool's
    `/api/signals/cloudwatch`. The permissions boundary must allow `events:InvokeApiDestination` on
    `api-destination/<namePrefix>sdlc-alarms/*`, and provider-aws-cloudwatchevents needs its own
@@ -127,7 +127,7 @@ crossplane composition render aws/render/$kind/xr.yaml aws/$kind-composition.yam
   --xrd apis/$kind/definition.yaml --required-resources aws/render/environment-config.yaml \
   --observed-resources aws/render/$kind/observed.yaml
 
-VRIXEL_CATALOG=../sdlc-governance/platform/aws-resources.yaml python3 -m pytest tests
+VALXEL_CATALOG=../sdlc-governance/platform/aws-resources.yaml python3 -m pytest tests
 ```
 
 `tests/` checks the module against the catalog: every type is built, with the same parameters and

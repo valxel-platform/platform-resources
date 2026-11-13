@@ -1,6 +1,6 @@
 # A SnsTopic as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
 # (see README, Checking a Composition).
-apiVersion: aws.platform.vrixel.dev/v1alpha1
+apiVersion: aws.platform.valxel.dev/v1alpha1
 kind: SnsTopic
 metadata:
   name: r-alerts-development-1a2b3c4d
@@ -14,7 +14,7 @@ spec:
     actions:
     - sns:Publish
   tags:
-    vrixel:product: AG
-    vrixel:feature: AG-FEAT-7
-    vrixel:data-class: general
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
   size: small

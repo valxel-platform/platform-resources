@@ -8,7 +8,7 @@ metadata:
   name: kinesis-stream
   annotations:
     openchoreo.dev/description: >-
-      An Amazon Kinesis data stream, built by the Vrixel platform's Crossplane Composition with encryption, private
+      An Amazon Kinesis data stream, built by the Valxel platform's Crossplane Composition with encryption, private
       access and least-privilege IAM.
 spec:
   parameters:
@@ -68,7 +68,7 @@ spec:
     - id: instance
       readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.streamName) && has(applied.instance.status.arn)}"
       template:
-        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        apiVersion: aws.platform.valxel.dev/v1alpha1
         kind: KinesisStream
         metadata:
           name: ${metadata.name}

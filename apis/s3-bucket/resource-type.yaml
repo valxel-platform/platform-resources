@@ -8,7 +8,7 @@ metadata:
   name: s3-bucket
   annotations:
     openchoreo.dev/description: >-
-      An Amazon S3 bucket, private and encrypted, built by the Vrixel platform's Crossplane Composition with encryption, private
+      An Amazon S3 bucket, private and encrypted, built by the Valxel platform's Crossplane Composition with encryption, private
       access and least-privilege IAM.
 spec:
   parameters:
@@ -71,7 +71,7 @@ spec:
     - id: instance
       readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.bucketName) && has(applied.instance.status.arn)}"
       template:
-        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        apiVersion: aws.platform.valxel.dev/v1alpha1
         kind: S3Bucket
         metadata:
           name: ${metadata.name}

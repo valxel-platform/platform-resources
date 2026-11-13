@@ -8,7 +8,7 @@ metadata:
   name: dynamodb-table
   annotations:
     openchoreo.dev/description: >-
-      An Amazon DynamoDB table, built by the Vrixel platform's Crossplane Composition with encryption, private
+      An Amazon DynamoDB table, built by the Valxel platform's Crossplane Composition with encryption, private
       access and least-privilege IAM.
 spec:
   parameters:
@@ -82,7 +82,7 @@ spec:
     - id: instance
       readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.tableName) && has(applied.instance.status.arn)}"
       template:
-        apiVersion: aws.platform.vrixel.dev/v1alpha1
+        apiVersion: aws.platform.valxel.dev/v1alpha1
         kind: DynamoTable
         metadata:
           name: ${metadata.name}

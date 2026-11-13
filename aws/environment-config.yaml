@@ -4,7 +4,7 @@
 apiVersion: apiextensions.crossplane.io/v1beta1
 kind: EnvironmentConfig
 metadata:
-  name: vrixel-aws
+  name: valxel-aws
 data:
   # The environment's account and region (product.yaml runtime.aws).
   accountId: "<account-id>"
@@ -21,11 +21,11 @@ data:
   kmsKeyArn: arn:aws:kms:<region>:<account-id>:key/<key-id>
   # Every role a workload identity creates gets this boundary: no access outside the product's
   # resources, whatever a policy says.
-  permissionsBoundaryArn: arn:aws:iam::<account-id>:policy/vrixel-workload-boundary
+  permissionsBoundaryArn: arn:aws:iam::<account-id>:policy/valxel-workload-boundary
   # Optional: an SNS topic for alarms (dead-letter queues). Empty: no alarms.
   alarmTopicArn: ""
   # Optional: a bucket for S3 access logs. Empty: no access logs.
   accessLogBucket: ""
   # Tags on every resource, on top of the product, feature and data class tags each carries.
   tags:
-    vrixel:managed-by: crossplane
+    valxel:managed-by: crossplane

@@ -2,8 +2,8 @@
 type the SDLC can pick has a ClusterResourceType, an XRD and an AWS Composition, with the same
 parameters and outputs, and stored data is never deleted with its binding.
 
-The catalog comes from $VRIXEL_CATALOG (a path), or from sdlc-governance on GitHub at
-$VRIXEL_CATALOG_REF (default main)."""
+The catalog comes from $VALXEL_CATALOG (a path), or from sdlc-governance on GitHub at
+$VALXEL_CATALOG_REF (default main)."""
 
 import os
 import re
@@ -19,11 +19,11 @@ OPENCHOREO_TYPES = {"postgres-crossplane", "redis-crossplane"}
 
 
 def load_catalog() -> dict:
-    path = os.environ.get("VRIXEL_CATALOG")
+    path = os.environ.get("VALXEL_CATALOG")
     if path:
         return yaml.safe_load(Path(path).read_text())
-    ref = os.environ.get("VRIXEL_CATALOG_REF", "main")
-    url = f"https://raw.githubusercontent.com/vrixel-tools/sdlc-governance/{ref}/platform/aws-resources.yaml"
+    ref = os.environ.get("VALXEL_CATALOG_REF", "main")
+    url = f"https://raw.githubusercontent.com/valxel-platform/sdlc-governance/{ref}/platform/aws-resources.yaml"
     with urllib.request.urlopen(url, timeout=30) as r:  # noqa: S310 - fixed https URL
         return yaml.safe_load(r.read())
 
@@ -123,7 +123,7 @@ def test_every_resource_gets_its_catalog_alarms(kind):
     if want:
         # Named with the data plane's prefix, which AlarmRouting's EventBridge rule matches, and
         # saying whose they are on the first line of the description, which the SDLC tool reads.
-        assert "$alarmBase" in comp and "vrixel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
+        assert "$alarmBase" in comp and "valxel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
     else:
         assert "kind: MetricAlarm" not in comp
 

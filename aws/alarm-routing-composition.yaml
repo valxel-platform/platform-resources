@@ -1,4 +1,4 @@
-# Builds an AlarmRouting: the data plane's Vrixel alarms, through EventBridge, to the SDLC tool.
+# Builds an AlarmRouting: the data plane's Valxel alarms, through EventBridge, to the SDLC tool.
 #
 #   Connection      EventBridge's credentials for the tool: the Authorization header from the Secret
 #   ApiDestination  the tool's /api/signals/cloudwatch, rate limited
@@ -8,14 +8,14 @@
 #   Target          the rule's target: the destination, retried for a day
 #
 # Every state change is sent (ALARM, OK, INSUFFICIENT_DATA): an OK resolves the tool's signal.
-# Settings come from the data plane's vrixel-aws EnvironmentConfig.
+# Settings come from the data plane's valxel-aws EnvironmentConfig.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
   name: alarm-routing-aws
 spec:
   compositeTypeRef:
-    apiVersion: aws.platform.vrixel.dev/v1alpha1
+    apiVersion: aws.platform.valxel.dev/v1alpha1
     kind: AlarmRouting
   mode: Pipeline
   pipeline:
@@ -29,7 +29,7 @@ spec:
           environmentConfigs:
             - type: Reference
               ref:
-                name: vrixel-aws
+                name: valxel-aws
 
     - step: render
       functionRef:
@@ -42,7 +42,7 @@ spec:
           template: |
             {{- $xr := .observed.composite.resource }}
             {{- $env := index .context "apiextensions.crossplane.io/environment" }}
-            {{- $tags := merge (dict "vrixel:purpose" "alarm-routing") (default (dict) $env.tags) }}
+            {{- $tags := merge (dict "valxel:purpose" "alarm-routing") (default (dict) $env.tags) }}
             {{- $base := printf "%ssdlc-alarms" $env.namePrefix }}
             {{- $destArn := "" }}
             {{- with getComposedResource . "destination" }}
@@ -86,7 +86,7 @@ spec:
             spec:
               forProvider:
                 region: {{ $env.region | quote }}
-                description: The Vrixel SDLC tool's CloudWatch alarm signals
+                description: The Valxel SDLC tool's CloudWatch alarm signals
                 invocationEndpoint: {{ $xr.spec.endpoint | quote }}
                 httpMethod: POST
                 invocationRateLimitPerSecond: {{ $xr.spec.rateLimitPerSecond | default 10 }}
@@ -130,7 +130,7 @@ spec:
             spec:
               forProvider:
                 region: {{ $env.region | quote }}
-                description: State changes of the Vrixel alarms, for the SDLC tool
+                description: State changes of the Valxel alarms, for the SDLC tool
                 eventPattern: {{ $pattern | toJson | quote }}
                 tags:
                   {{- range $k, $v := $tags }}
@@ -157,7 +157,7 @@ spec:
                   maximumEventAgeInSeconds: 86400
                   maximumRetryAttempts: 185
             ---
-            apiVersion: aws.platform.vrixel.dev/v1alpha1
+            apiVersion: aws.platform.valxel.dev/v1alpha1
             kind: AlarmRouting
             status:
               destinationArn: {{ $destArn | quote }}
