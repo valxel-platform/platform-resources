@@ -140,3 +140,7 @@ outputs, and stored data is kept when its binding goes.
 2. Here: `apis/<type>/definition.yaml` and `resource-type.yaml`, `aws/<type>-composition.yaml`
    (encrypted with the product key, a `RolePolicy` per consumer, `managementPolicies` without
    `Delete` and `retainPolicy: Retain` if it stores data), and render samples. Add the provider if it's new.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
