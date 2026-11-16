@@ -59,8 +59,12 @@ jobs:
               settings=$flavour/render/environment-config.yaml
               render "$dir/xr.yaml" "$flavour/$kind-composition.yaml" "apis/$kind/definition.yaml" "$settings" \
                 > "out/$flavour-$kind-first.yaml"
-              render "$dir/xr.yaml" "$flavour/$kind-composition.yaml" "apis/$kind/definition.yaml" "$settings" \
-                --observed-resources "$dir/observed.yaml" > "out/$flavour-$kind-later.yaml"
+              if grep -q '^kind:' "$dir/observed.yaml"; then
+                render "$dir/xr.yaml" "$flavour/$kind-composition.yaml" "apis/$kind/definition.yaml" "$settings" \
+                  --observed-resources "$dir/observed.yaml" > "out/$flavour-$kind-later.yaml"
+              else  # composes nothing (kafka-user on MSK): the first render is the only one
+                cp "out/$flavour-$kind-first.yaml" "out/$flavour-$kind-later.yaml"
+              fi
               echo "$flavour/$kind: $(grep -c '^kind:' "out/$flavour-$kind-later.yaml") objects once reported"
             done
           done
