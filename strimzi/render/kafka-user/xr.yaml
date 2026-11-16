@@ -1,0 +1,12 @@
+# An EventUser as OpenChoreo renders it into a cell namespace: one component's Kafka identity.
+apiVersion: aws.platform.valxel.dev/v1alpha1
+kind: EventUser
+metadata:
+  name: emr-notes-worker-kafka-development-1a2b3c4d
+  namespace: dp-default-emr-development-5f6e7d8c
+spec:
+  component: emr-notes-worker
+  tags:
+    valxel:product: EMR
+    valxel:data-class: phi
+  size: small

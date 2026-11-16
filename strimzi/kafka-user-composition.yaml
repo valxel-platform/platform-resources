@@ -1,0 +1,73 @@
+# Builds an EventUser on Strimzi: one component's SCRAM-SHA-512 user (provider-kafka). Its password
+# goes to the Secret <component>-kafka in the component's own namespace (username, password), which
+# the component's workload reads; nobody else holds it. What the user may do is only what each
+# kafka-topic it uses grants (strimzi/kafka-topic-composition.yaml).
+#
+# The user name is <namePrefix><component>-<namespace hash>, the principal those ACLs name.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: kafka-user-strimzi
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: EventUser
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $username := printf "%s%s-%s" $env.namePrefix $xr.spec.component $nsHash }}
+            {{- $secret := printf "%s-kafka" $xr.spec.component }}
+            ---
+            apiVersion: user.kafka.m.crossplane.io/v1alpha1
+            kind: User
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "user" }}
+                crossplane.io/external-name: {{ $username | quote }}
+            spec:
+              providerConfigRef:
+                kind: ClusterProviderConfig
+                name: {{ $env.kafka.providerConfig | quote }}
+              forProvider:
+                mechanisms: [SCRAM-SHA-512]
+              writeConnectionSecretToRef:
+                name: {{ $secret | quote }}
+            {{- with getComposedResource . "user" }}
+            {{- if dig "status" "conditions" (list) . }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: EventUser
+            status:
+              username: {{ $username | quote }}
+              secret: {{ $secret | quote }}
+              auth: scram
+            {{- end }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

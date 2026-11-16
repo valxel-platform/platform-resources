@@ -18,10 +18,32 @@ service and binds it to each environment. This repo is what turns those Resource
 | `sqs-queue` | SQS queue plus a dead-letter queue, with an alarm when the data plane has an alarm topic | no |
 | `s3-bucket` | S3 bucket: no public access or ACLs, TLS only, versioning, optional expiry and access logs | yes |
 | `sns-topic` | SNS topic (never PHI in a message) | no |
+| `kafka-topic` | A Kafka topic for one data contract, never picked by hand: replication 3, compacted or kept `retention_days`, a dead-letter topic; access only for the contract's owner (write) and consumers (read, their own consumer groups). MSK with IAM in production (`aws/`), Strimzi with ACLs elsewhere (`strimzi/`), both through provider-kafka | yes |
+| `kafka-user` | One component's Kafka identity: nothing on MSK (IAM through its workload identity), a SCRAM user on Strimzi whose password is a Secret in its own namespace | no |
 | `workload-identity` | One component's IAM role, trusted only through EKS Pod Identity for its ServiceAccount, under the permissions boundary | no |
 
 Every type is encrypted with the product's KMS key and tagged with product, feature and data class,
 and comes with the catalog's standard CloudWatch alarms (see [Alarms](#alarms)).
+
+## Kafka topics
+
+The SDLC tool writes a `kafka-topic` Resource for each approved data contract (ODCS v3, the HLD's
+Datasets) and a `kafka-user` for each component the contract names, so a topic, its dead-letter
+topic and every component's access to it exist only because a contract says so. Topic
+auto-creation is off on every cluster.
+
+- **Production: Amazon MSK with IAM.** Install `aws/kafka-topic-composition.yaml` and
+  `aws/kafka-user-composition.yaml`. Each component's workload-identity role gets one policy per
+  topic: Connect to the cluster, write (the owner) or read (a consumer) that topic, its own
+  consumer groups (`<component>*`) and the dead-letter topic. MSK has no other sign-in method
+  enabled. provider-kafka creates topics through MSK's Kafka API, signing in with IAM.
+- **Elsewhere: Strimzi with SCRAM.** Install `strimzi/kafka-topic-composition.yaml` and
+  `strimzi/kafka-user-composition.yaml`. Each component gets a SCRAM-SHA-512 user whose password is
+  the Secret `<component>-kafka` in its own namespace, and ACLs for exactly the same access. The
+  cluster authorizes every request, so a user with no ACL is denied.
+
+Each data plane installs one flavour's two Compositions, and provider-kafka with a
+`ClusterProviderConfig` named in `valxel-aws` (`kafka.providerConfig`).
 
 ## How access works
 

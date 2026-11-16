@@ -1,0 +1,14 @@
+# The composed SCRAM user as provider-kafka reports it once it exists.
+apiVersion: user.kafka.m.crossplane.io/v1alpha1
+kind: User
+metadata:
+  name: emr-notes-worker-kafka-development-1a2b3c4d
+  namespace: dp-default-emr-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: user
+status:
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-16T00:00:00Z'

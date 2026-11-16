@@ -84,13 +84,15 @@ def test_stored_data_is_never_deleted_with_its_binding(kind):
         assert rt["spec"]["retainPolicy"] == "Retain"
         # Crossplane v2 namespaced resources: no Delete in managementPolicies keeps the AWS resource.
         assert 'managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]' in comp
-    assert "kmsKeyArn" in comp or kind == "workload-identity", f"{kind}: not encrypted with the product key"
+    # Kafka encrypts at rest with the cluster's key (MSK's setting), not per topic; identities hold no data.
+    assert "kmsKeyArn" in comp or kind in ("workload-identity", "kafka-topic", "kafka-user"), \
+        f"{kind}: not encrypted with the product key"
 
 
 @pytest.mark.parametrize("kind", [k for k in TYPES if CATALOG["types"][k].get("access")])
 def test_catalog_actions_belong_to_the_service(kind):
     prefix = {"dynamodb-table": "dynamodb", "kinesis-stream": "kinesis", "sqs-queue": "sqs", "s3-bucket": "s3",
-              "sns-topic": "sns"}[kind]
+              "sns-topic": "sns", "kafka-topic": "kafka-cluster"}[kind]
     for verb, actions in CATALOG["types"][kind]["access"].items():
         assert all(a.split(":", 1)[0] == prefix for a in actions), f"{kind}: {verb} grants {actions}"
 
@@ -126,6 +128,36 @@ def test_every_resource_gets_its_catalog_alarms(kind):
         assert "$alarmBase" in comp and "valxel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
     else:
         assert "kind: MetricAlarm" not in comp
+
+
+KAFKA = ("kafka-topic", "kafka-user")
+
+
+@pytest.mark.parametrize("kind", KAFKA)
+def test_kafka_types_build_on_strimzi_too(kind):
+    """Outside production the data plane's Kafka is Strimzi: each Kafka type has a Composition and
+    render fixtures there as well, for the same XRD."""
+    for f in (f"strimzi/{kind}-composition.yaml", f"strimzi/render/{kind}/xr.yaml", f"strimzi/render/{kind}/observed.yaml"):
+        assert (ROOT / f).is_file(), f"{kind}: {f} is missing"
+    xrd = doc(ROOT / f"apis/{kind}/definition.yaml")
+    for flavour in ("aws", "strimzi"):
+        comp = doc(ROOT / f"{flavour}/{kind}-composition.yaml")
+        assert comp["spec"]["compositeTypeRef"]["kind"] == xrd["spec"]["names"]["kind"]
+
+
+def test_kafka_access_is_only_what_the_contract_gives():
+    """MSK: one policy per component, its consumer groups only, the dead-letter topic only for
+    readers. Strimzi: ACLs for the component's own SCRAM user, groups prefixed with its name."""
+    msk = (ROOT / "aws/kafka-topic-composition.yaml").read_text()
+    assert '"%s:group/%s/%s/%s*" $arn $k.clusterName $k.clusterUuid .component' in msk
+    assert '(printf "%s.dlt" $topicArn)' in msk and 'has "read" $access' in msk
+    assert 'managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]' in msk
+    strimzi = (ROOT / "strimzi/kafka-topic-composition.yaml").read_text()
+    assert '"type" "Group" "name" $c.component "pattern" "Prefixed" "op" "Read"' in strimzi
+    assert 'printf "User:%s%s-%s" $env.namePrefix $c.component $nsHash' in strimzi
+    user = (ROOT / "strimzi/kafka-user-composition.yaml").read_text()
+    assert 'printf "%s%s-%s" $env.namePrefix $xr.spec.component $nsHash' in user and "SCRAM-SHA-512" in user
+    assert "provider-kafka:" in (ROOT / "aws/provider.yaml").read_text()
 
 
 def test_alarm_routing_sends_the_prefixed_alarms_to_the_tool():

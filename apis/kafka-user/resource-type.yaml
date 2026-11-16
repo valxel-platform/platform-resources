@@ -1,0 +1,59 @@
+# One component's Kafka identity, as an OpenChoreo ClusterResourceType (constitution VX-16, VX-19).
+# Apply on the control plane. Internal: the SDLC tool creates one for each component a data contract
+# names. On Strimzi it is a SCRAM user whose credentials are in the Secret `secret` in the
+# component's namespace; on MSK the component signs in with IAM and `secret` is empty.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: kafka-user
+  annotations:
+    openchoreo.dev/description: >-
+      One component's Kafka identity: a SCRAM user on Strimzi, IAM through its workload identity on MSK.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [component]
+      properties:
+        component:
+          type: string
+          description: The OpenChoreo component this identity is for.
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        tags:
+          type: object
+          description: Tags (product, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Nothing stored that outlives it.
+  retainPolicy: Delete
+
+  outputs:
+    - name: username
+      value: ${applied.instance.status.username}
+    - name: secret
+      value: ${applied.instance.status.secret}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.auth)}"
+      template:
+        apiVersion: aws.platform.valxel.dev/v1alpha1
+        kind: EventUser
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          component: ${parameters.component}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

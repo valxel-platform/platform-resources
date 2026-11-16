@@ -14,5 +14,12 @@ data:
   permissionsBoundaryArn: arn:aws:iam::111111111111:policy/valxel-workload-boundary
   alarmTopicArn: arn:aws:sns:us-east-2:111111111111:vx-platform-alarms
   accessLogBucket: vx-access-logs-111111111111
+  # The environment's Kafka (kafka-topic, kafka-user): MSK with IAM in production.
+  kafka:
+    auth: iam
+    bootstrap: b-1.agtech.abcd12.c2.kafka.us-east-2.amazonaws.com:9098,b-2.agtech.abcd12.c2.kafka.us-east-2.amazonaws.com:9098
+    clusterName: agtech-production
+    clusterUuid: 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0-2
+    providerConfig: valxel-kafka
   tags:
     valxel:managed-by: crossplane

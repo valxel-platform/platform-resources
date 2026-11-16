@@ -1,0 +1,16 @@
+# The composed topic as provider-kafka reports it once it exists: pass with --observed-resources to
+# render a later reconcile, where the XR gets its outputs.
+apiVersion: topic.kafka.m.crossplane.io/v1alpha1
+kind: Topic
+metadata:
+  name: r-emr-notes-v1-development-1a2b3c4d
+  namespace: dp-default-emr-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: topic
+    crossplane.io/external-name: emr.notes.v1
+status:
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-16T00:00:00Z'

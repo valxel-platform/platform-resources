@@ -1,0 +1,47 @@
+# An EventTopic as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition): the topic of a synthetic data contract, its owner writing
+# and two consumers reading.
+apiVersion: aws.platform.valxel.dev/v1alpha1
+kind: EventTopic
+metadata:
+  name: r-emr-notes-v1-production-1a2b3c4d
+  namespace: dp-default-emr-production-5f6e7d8c
+spec:
+  topic: emr.notes.v1
+  partitions: 6
+  retention_days: 2555
+  compacted: true
+  dead_letter: true
+  consumers:
+  - component: emr-notes-api
+    access:
+    - write
+    actions:
+    - kafka-cluster:Connect
+    - kafka-cluster:DescribeTopic
+    - kafka-cluster:WriteData
+    - kafka-cluster:WriteDataIdempotently
+  - component: emr-notes-worker
+    access:
+    - read
+    actions:
+    - kafka-cluster:AlterGroup
+    - kafka-cluster:Connect
+    - kafka-cluster:DescribeGroup
+    - kafka-cluster:DescribeTopic
+    - kafka-cluster:ReadData
+  - component: emr-knowledge
+    access:
+    - read
+    actions:
+    - kafka-cluster:AlterGroup
+    - kafka-cluster:Connect
+    - kafka-cluster:DescribeGroup
+    - kafka-cluster:DescribeTopic
+    - kafka-cluster:ReadData
+  tags:
+    valxel:product: EMR
+    valxel:feature: EMR-FEAT-9
+    valxel:resource: emr-notes-v1
+    valxel:data-class: phi
+  size: small

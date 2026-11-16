@@ -26,6 +26,16 @@ data:
   alarmTopicArn: ""
   # Optional: a bucket for S3 access logs. Empty: no access logs.
   accessLogBucket: ""
+  # The environment's Kafka, for kafka-topic and kafka-user. Production: Amazon MSK with IAM access
+  # control (auth: iam; clusterName and clusterUuid build the topic and group ARNs in each
+  # component's policy). Elsewhere: the platform's Strimzi cluster with SCRAM users (auth: scram).
+  # providerConfig names provider-kafka's ClusterProviderConfig for this cluster (provider.yaml).
+  kafka:
+    auth: iam
+    bootstrap: <bootstrap brokers>
+    clusterName: <msk-cluster>
+    clusterUuid: <msk-cluster-uuid>
+    providerConfig: valxel-kafka
   # Tags on every resource, on top of the product, feature and data class tags each carries.
   tags:
     valxel:managed-by: crossplane

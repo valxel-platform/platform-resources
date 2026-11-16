@@ -1,0 +1,34 @@
+# Builds an EventUser on Amazon MSK: nothing. In production a component signs in to MSK with IAM,
+# through its workload identity's role, and each kafka-topic attaches exactly the access the data
+# contract gives it (aws/kafka-topic-composition.yaml). This only reports that, so the component's
+# workload knows how to sign in (auth: iam, no secret).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: kafka-user-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: EventUser
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: EventUser
+            status:
+              username: ""
+              secret: ""
+              auth: iam
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

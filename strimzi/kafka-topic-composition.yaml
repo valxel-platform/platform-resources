@@ -1,0 +1,143 @@
+# Builds an EventTopic on Strimzi, the Kafka outside production (constitution VX-16, VX-19). Install
+# on non-production data planes; production installs aws/kafka-topic-composition.yaml instead.
+#
+#   Topic   the contract's topic (provider-kafka, through the cluster's admin listener): replication
+#           3, min.insync.replicas 2, compacted or kept retention_days; kept if the Kubernetes
+#           object goes (no Delete policy)
+#   Topic   <topic>.dlt when dead_letter, kept 14 days
+#   AccessControlList   the cluster authorizes every request (authorization: simple), so a principal
+#           with no ACL is denied. One set per component, for its SCRAM user (kafka-user):
+#             writer  Write and Describe on the topic, IdempotentWrite on the cluster
+#             reader  Read and Describe on the topic, Read on consumer groups prefixed with its own
+#                     name, Write and Describe on the dead-letter topic
+#
+# The user names match strimzi/kafka-user-composition.yaml: <namePrefix><component>-<namespace hash>.
+# Settings come from the data plane's valxel-aws EnvironmentConfig (kafka: bootstrap, providerConfig).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: kafka-topic-strimzi
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: EventTopic
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $k := $env.kafka }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $topic := $xr.spec.topic }}
+            {{- $config := dict "min.insync.replicas" "2" }}
+            {{- if $xr.spec.compacted }}
+            {{- $_ := set $config "cleanup.policy" "compact" }}
+            {{- else }}
+            {{- $_ := set $config "cleanup.policy" "delete" }}
+            {{- $_ := set $config "retention.ms" (mul (default 7 $xr.spec.retention_days) 86400000 | toString) }}
+            {{- end }}
+            {{- $pc := dict "kind" "ClusterProviderConfig" "name" $k.providerConfig }}
+            ---
+            apiVersion: topic.kafka.m.crossplane.io/v1alpha1
+            kind: Topic
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "topic" }}
+                crossplane.io/external-name: {{ $topic | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              providerConfigRef: {{ $pc | toJson }}
+              forProvider:
+                partitions: {{ default 6 $xr.spec.partitions }}
+                replicationFactor: 3
+                config: {{ $config | toJson }}
+            {{- if $xr.spec.dead_letter }}
+            ---
+            apiVersion: topic.kafka.m.crossplane.io/v1alpha1
+            kind: Topic
+            metadata:
+              name: {{ printf "%s-dlt" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letter" }}
+                crossplane.io/external-name: {{ printf "%s.dlt" $topic | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              providerConfigRef: {{ $pc | toJson }}
+              forProvider:
+                partitions: {{ default 6 $xr.spec.partitions }}
+                replicationFactor: 3
+                config: {{ dict "min.insync.replicas" "2" "cleanup.policy" "delete" "retention.ms" "1209600000" | toJson }}
+            {{- end }}
+            {{- range $c := $xr.spec.consumers }}
+            {{- $user := printf "User:%s%s-%s" $env.namePrefix $c.component $nsHash }}
+            {{- $grants := list }}
+            {{- if has "write" (default (list) $c.access) }}
+            {{- $grants = append $grants (dict "id" "write" "type" "Topic" "name" $topic "pattern" "Literal" "op" "Write") }}
+            {{- $grants = append $grants (dict "id" "write-describe" "type" "Topic" "name" $topic "pattern" "Literal" "op" "Describe") }}
+            {{- $grants = append $grants (dict "id" "idempotent" "type" "Cluster" "name" "kafka-cluster" "pattern" "Literal" "op" "IdempotentWrite") }}
+            {{- end }}
+            {{- if has "read" (default (list) $c.access) }}
+            {{- $grants = append $grants (dict "id" "read" "type" "Topic" "name" $topic "pattern" "Literal" "op" "Read") }}
+            {{- $grants = append $grants (dict "id" "read-describe" "type" "Topic" "name" $topic "pattern" "Literal" "op" "Describe") }}
+            {{- $grants = append $grants (dict "id" "groups" "type" "Group" "name" $c.component "pattern" "Prefixed" "op" "Read") }}
+            {{- if $xr.spec.dead_letter }}
+            {{- $grants = append $grants (dict "id" "dlt-write" "type" "Topic" "name" (printf "%s.dlt" $topic) "pattern" "Literal" "op" "Write") }}
+            {{- $grants = append $grants (dict "id" "dlt-describe" "type" "Topic" "name" (printf "%s.dlt" $topic) "pattern" "Literal" "op" "Describe") }}
+            {{- end }}
+            {{- end }}
+            {{- range $g := $grants }}
+            ---
+            apiVersion: acl.kafka.m.crossplane.io/v1alpha1
+            kind: AccessControlList
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component $g.id | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "acl-%s-%s" $c.component $g.id) }}
+            spec:
+              providerConfigRef: {{ $pc | toJson }}
+              forProvider:
+                resourceType: {{ $g.type }}
+                resourceName: {{ $g.name | quote }}
+                resourcePatternTypeFilter: {{ $g.pattern }}
+                resourceOperation: {{ $g.op }}
+                resourcePermissionType: Allow
+                resourcePrincipal: {{ $user | quote }}
+                resourceHost: "*"
+            {{- end }}
+            {{- end }}
+            {{- with getComposedResource . "topic" }}
+            {{- if dig "status" "conditions" (list) . }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: EventTopic
+            status:
+              topic: {{ $topic | quote }}
+              bootstrap: {{ $k.bootstrap | quote }}
+              auth: scram
+            {{- end }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

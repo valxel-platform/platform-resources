@@ -46,18 +46,27 @@ jobs:
           mkdir -p out
           # Newer CLIs: `crossplane composition render --required-resources`; older: `crossplane render --extra-resources`.
           render() {
-            local xr=$1 comp=$2 xrd=$3; shift 3
+            local xr=$1 comp=$2 xrd=$3 settings=$4; shift 4
             crossplane composition render "$xr" "$comp" functions.yaml --xrd "$xrd" \
-                --required-resources aws/render/environment-config.yaml "$@" 2>/dev/null \
+                --required-resources "$settings" "$@" 2>/dev/null \
               || crossplane render "$xr" "$comp" functions.yaml --xrd "$xrd" \
-                --extra-resources aws/render/environment-config.yaml "$@"
+                --extra-resources "$settings" "$@"
           }
-          for dir in aws/render/*/; do
-            kind=$(basename "$dir")
-            render "$dir/xr.yaml" "aws/$kind-composition.yaml" "apis/$kind/definition.yaml" > "out/$kind-first.yaml"
-            render "$dir/xr.yaml" "aws/$kind-composition.yaml" "apis/$kind/definition.yaml" \
-              --observed-resources "$dir/observed.yaml" > "out/$kind-later.yaml"
-            echo "$kind: $(grep -c '^kind:' "out/$kind-later.yaml") objects after AWS reports"
+          # aws/: every type on AWS (MSK for Kafka). strimzi/: the Kafka types outside production.
+          for flavour in aws strimzi; do
+            for dir in $flavour/render/*/; do
+              kind=$(basename "$dir")
+              settings=$flavour/render/environment-config.yaml
+              render "$dir/xr.yaml" "$flavour/$kind-composition.yaml" "apis/$kind/definition.yaml" "$settings" \
+                > "out/$flavour-$kind-first.yaml"
+              if grep -q '^kind:' "$dir/observed.yaml"; then
+                render "$dir/xr.yaml" "$flavour/$kind-composition.yaml" "apis/$kind/definition.yaml" "$settings" \
+                  --observed-resources "$dir/observed.yaml" > "out/$flavour-$kind-later.yaml"
+              else  # composes nothing (kafka-user on MSK): the first render is the only one
+                cp "out/$flavour-$kind-first.yaml" "out/$flavour-$kind-later.yaml"
+              fi
+              echo "$flavour/$kind: $(grep -c '^kind:' "out/$flavour-$kind-later.yaml") objects once reported"
+            done
           done
       - name: Validate against the provider and XRD schemas
         run: |
