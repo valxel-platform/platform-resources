@@ -1,0 +1,116 @@
+# One Kafka topic for an approved data contract, as an OpenChoreo ClusterResourceType (constitution
+# VX-16, VX-19). Apply on the control plane. Never picked by an architect: the SDLC tool writes one
+# per data contract (the HLD's Datasets), the contract's owner writing and its consumers reading.
+# It renders one EventTopic into the cell namespace; the data plane's Composition builds it on that
+# environment's Kafka (MSK with IAM in production, Strimzi with SCRAM users elsewhere).
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: kafka-topic
+  annotations:
+    openchoreo.dev/description: >-
+      A Kafka topic for one data contract, built by the Valxel platform's Crossplane Composition with its dead-letter
+      topic and least-privilege access for the components the contract names.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required:
+      - topic
+      properties:
+        topic:
+          type: string
+          description: The Kafka topic, as the data contract's schema names it.
+          pattern: ^[a-z][a-z0-9_.-]*\.v[0-9]+$
+        partitions:
+          type: integer
+          description: Partitions; never changed once created (per-record order depends on it).
+          minimum: 1
+          maximum: 96
+          default: 6
+        retention_days:
+          type: integer
+          description: How long records stay, from the contract's retention; ignored when compacted.
+          minimum: 1
+          maximum: 3650
+          default: 7
+        compacted:
+          type: boolean
+          description: Keep each key's latest record forever (cleanup.policy=compact), for rebuilds.
+          default: false
+        dead_letter:
+          type: boolean
+          description: Also create <topic>.dlt, which the readers may write records they can't apply to.
+          default: true
+        consumers:
+          type: array
+          description: 'The components that use it: the contract''s owner writes, its consumers read (written by the
+            SDLC tool from the approved data contract), with the IAM actions each gets on MSK.'
+          default: []
+          items:
+            type: object
+            required:
+            - component
+            - actions
+            properties:
+              component:
+                type: string
+                pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+              access:
+                type: array
+                items:
+                  type: string
+                  enum:
+                  - read
+                  - write
+              actions:
+                type: array
+                items:
+                  type: string
+                  pattern: ^[a-z0-9-]+:[A-Za-z*]+$
+        tags:
+          type: object
+          description: Tags (product, feature, data class).
+          default: {}
+          additionalProperties:
+            type: string
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # A topic's records outlive its binding: removing it keeps the topic (VX-19).
+  retainPolicy: Retain
+
+  outputs:
+    - name: topic
+      value: ${applied.instance.status.topic}
+    - name: bootstrap
+      value: ${applied.instance.status.bootstrap}
+    - name: auth
+      value: ${applied.instance.status.auth}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.topic)}"
+      template:
+        apiVersion: aws.platform.valxel.dev/v1alpha1
+        kind: EventTopic
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          topic: ${parameters.topic}
+          partitions: ${parameters.partitions}
+          retention_days: ${parameters.retention_days}
+          compacted: ${parameters.compacted}
+          dead_letter: ${parameters.dead_letter}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

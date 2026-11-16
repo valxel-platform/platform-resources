@@ -1,0 +1,49 @@
+# The KafkaUser API: one component's Kafka identity. The kafka-user ClusterResourceType creates one
+# in the cell namespace for each component that reads or writes a topic. On Strimzi (outside
+# production) strimzi/kafka-user-composition.yaml makes a SCRAM user whose password lands in a
+# Secret in the component's namespace; on MSK (production) the component signs in with IAM through
+# its workload identity, so aws/kafka-user-composition.yaml only reports how to sign in.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: eventusers.aws.platform.valxel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.valxel.dev
+  names:
+    kind: EventUser
+    plural: eventusers
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [component]
+              properties:
+                component:
+                  type: string
+                  description: The OpenChoreo component this identity is for.
+                  pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                tags:
+                  type: object
+                  description: Tags (product, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                username:
+                  type: string
+                secret:
+                  type: string
+                auth:
+                  type: string

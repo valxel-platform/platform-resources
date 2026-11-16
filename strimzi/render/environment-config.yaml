@@ -1,0 +1,23 @@
+# A filled-in valxel-aws EnvironmentConfig for rendering the Strimzi Compositions (a data plane outside production).
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-aws
+data:
+  accountId: '111111111111'
+  region: us-east-2
+  clusterName: agtech-development
+  # The environment this data plane runs (as in product.yaml's pipeline); alarms carry it.
+  environment: development
+  namePrefix: vx-
+  kmsKeyArn: arn:aws:kms:us-east-2:111111111111:key/0b5c-example
+  permissionsBoundaryArn: arn:aws:iam::111111111111:policy/valxel-workload-boundary
+  alarmTopicArn: arn:aws:sns:us-east-2:111111111111:vx-platform-alarms
+  accessLogBucket: vx-access-logs-111111111111
+  # The environment's Kafka: the platform's Strimzi cluster with SCRAM users.
+  kafka:
+    auth: scram
+    bootstrap: valxel-kafka-bootstrap.kafka.svc:9094
+    providerConfig: valxel-kafka
+  tags:
+    valxel:managed-by: crossplane

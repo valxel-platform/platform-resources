@@ -1,0 +1,89 @@
+# The KafkaTopic API: one Kafka topic for a data contract. The kafka-topic ClusterResourceType creates
+# one in the cell namespace of each environment it is bound to; aws/kafka-topic-composition.yaml
+# (MSK, production) or strimzi/kafka-topic-composition.yaml (Strimzi, elsewhere) builds it. Install
+# on every data plane, with the one Composition that matches its Kafka.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: eventtopics.aws.platform.valxel.dev
+spec:
+  scope: Namespaced
+  group: aws.platform.valxel.dev
+  names:
+    kind: EventTopic
+    plural: eventtopics
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [topic]
+              properties:
+                topic:
+                  type: string
+                  description: The Kafka topic, as the data contract's schema names it.
+                  pattern: "^[a-z][a-z0-9_.-]*\\.v[0-9]+$"
+                partitions:
+                  type: integer
+                  description: Partitions; never changed once created (per-record order depends on it).
+                  minimum: 1
+                  maximum: 96
+                  default: 6
+                retention_days:
+                  type: integer
+                  description: How long records stay, from the contract's retention; ignored when compacted.
+                  minimum: 1
+                  maximum: 3650
+                  default: 7
+                compacted:
+                  type: boolean
+                  description: Keep each key's latest record forever (cleanup.policy=compact), for rebuilds.
+                  default: false
+                dead_letter:
+                  type: boolean
+                  description: Also create <topic>.dlt, which the readers may write records they can't apply to.
+                  default: true
+                consumers:
+                  type: array
+                  description: >-
+                    The components that use it: the contract's owner writes, its consumers read
+                    (written by the SDLC tool from the approved data contract), with the IAM actions
+                    each gets on MSK.
+                  default: []
+                  items:
+                    type: object
+                    required: [component, actions]
+                    properties:
+                      component:
+                        type: string
+                        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                      access:
+                        type: array
+                        items: {type: string, enum: [read, write]}
+                      actions:
+                        type: array
+                        items: {type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}
+                tags:
+                  type: object
+                  description: Tags (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; topics share the environment's cluster.
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                topic:
+                  type: string
+                bootstrap:
+                  type: string
+                auth:
+                  type: string

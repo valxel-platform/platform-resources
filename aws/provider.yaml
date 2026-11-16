@@ -165,3 +165,27 @@ spec:
   package: xpkg.crossplane.io/crossplane-contrib/provider-aws-eks:v2.9.0
   runtimeConfigRef:
     name: provider-aws-eks
+---
+# Kafka topics, ACLs and SCRAM users (kafka-topic, kafka-user), on MSK in production and the
+# platform's Strimzi cluster elsewhere. Its ClusterProviderConfig `valxel-kafka` (one per data plane,
+# made by the platform team) points at the environment's cluster: on MSK with sasl aws-msk-iam,
+# signing in with this ServiceAccount's Pod Identity role, which may manage topics on that cluster
+# only (provider-kafka's README lists the actions); on Strimzi with a SCRAM user that is a super
+# user of that cluster, from a Secret in crossplane-system.
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-kafka
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-kafka
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-kafka
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-kafka:v1.4.2
+  runtimeConfigRef:
+    name: provider-kafka

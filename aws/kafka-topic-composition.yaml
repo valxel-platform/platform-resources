@@ -1,0 +1,192 @@
+# Builds an EventTopic on Amazon MSK, the production Kafka (constitution VX-16, VX-19). Install on
+# production data planes; others install strimzi/kafka-topic-composition.yaml instead.
+#
+#   Topic        the contract's topic, through MSK's Kafka API with IAM (provider-kafka); replication
+#                3, min.insync.replicas 2, compacted or kept retention_days; kept on MSK if the
+#                Kubernetes object goes (no Delete policy)
+#   Topic        <topic>.dlt when dead_letter: what a reader can't apply, kept 14 days
+#   RolePolicy   one per component on its workload-identity role: Connect to this cluster; the
+#                writer may write this topic (idempotently); a reader may read it, use consumer
+#                groups named after itself only, and write the dead-letter topic. Nothing else:
+#                MSK's IAM access control denies any topic or group not granted here. Records are
+#                encrypted at rest with the cluster's KMS key (the cluster's setting, not a topic's).
+#   MetricAlarm  the catalog's consumers-behind alarm, one per reading consumer group
+#
+# Settings come from the data plane's valxel-aws EnvironmentConfig (kafka: clusterName, clusterUuid,
+# bootstrap, providerConfig).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: kafka-topic-aws
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: EventTopic
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $k := $env.kafka }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+            {{- $topic := $xr.spec.topic }}
+            {{- $arn := printf "arn:aws:kafka:%s:%s" $env.region $env.accountId }}
+            {{- $clusterArn := printf "%s:cluster/%s/%s" $arn $k.clusterName $k.clusterUuid }}
+            {{- $topicArn := printf "%s:topic/%s/%s/%s" $arn $k.clusterName $k.clusterUuid $topic }}
+            {{- $config := dict "min.insync.replicas" "2" }}
+            {{- if $xr.spec.compacted }}
+            {{- $_ := set $config "cleanup.policy" "compact" }}
+            {{- else }}
+            {{- $_ := set $config "cleanup.policy" "delete" }}
+            {{- $_ := set $config "retention.ms" (mul (default 7 $xr.spec.retention_days) 86400000 | toString) }}
+            {{- end }}
+            ---
+            apiVersion: topic.kafka.m.crossplane.io/v1alpha1
+            kind: Topic
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "topic" }}
+                crossplane.io/external-name: {{ $topic | quote }}
+            spec:
+              # Keep the topic (and its records) if this object is deleted: Crossplane may create,
+              # update and observe it, never delete it (VX-19).
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              providerConfigRef:
+                kind: ClusterProviderConfig
+                name: {{ $k.providerConfig | quote }}
+              forProvider:
+                partitions: {{ default 6 $xr.spec.partitions }}
+                replicationFactor: 3
+                config: {{ $config | toJson }}
+            {{- if $xr.spec.dead_letter }}
+            ---
+            apiVersion: topic.kafka.m.crossplane.io/v1alpha1
+            kind: Topic
+            metadata:
+              name: {{ printf "%s-dlt" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letter" }}
+                crossplane.io/external-name: {{ printf "%s.dlt" $topic | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              providerConfigRef:
+                kind: ClusterProviderConfig
+                name: {{ $k.providerConfig | quote }}
+              forProvider:
+                partitions: {{ default 6 $xr.spec.partitions }}
+                replicationFactor: 3
+                config: {{ dict "min.insync.replicas" "2" "cleanup.policy" "delete" "retention.ms" "1209600000" | toJson }}
+            {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- if .actions }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix .component $nsHash | trunc 64 }}
+            {{- $access := default (list) .access }}
+            {{- $onCluster := list "kafka-cluster:Connect" }}
+            {{- if has "kafka-cluster:WriteDataIdempotently" .actions }}{{- $onCluster = append $onCluster "kafka-cluster:WriteDataIdempotently" }}{{- end }}
+            {{- $onTopic := list }}
+            {{- range .actions }}{{- if has . (list "kafka-cluster:DescribeTopic" "kafka-cluster:ReadData" "kafka-cluster:WriteData") }}{{- $onTopic = append $onTopic . }}{{- end }}{{- end }}
+            {{- $statements := list (dict "Sid" "Cluster" "Effect" "Allow" "Action" $onCluster "Resource" $clusterArn)
+                                    (dict "Sid" "Topic" "Effect" "Allow" "Action" $onTopic "Resource" $topicArn) }}
+            {{- if has "read" $access }}
+            {{- $groups := printf "%s:group/%s/%s/%s*" $arn $k.clusterName $k.clusterUuid .component }}
+            {{- $statements = append $statements (dict "Sid" "Groups" "Effect" "Allow" "Action" (list "kafka-cluster:DescribeGroup" "kafka-cluster:AlterGroup") "Resource" $groups) }}
+            {{- if $xr.spec.dead_letter }}
+            {{- $statements = append $statements (dict "Sid" "DeadLetter" "Effect" "Allow" "Action" (list "kafka-cluster:DescribeTopic" "kafka-cluster:WriteData") "Resource" (printf "%s.dlt" $topicArn)) }}
+            {{- end }}
+            {{- end }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s" .component) }}
+            spec:
+              forProvider:
+                role: {{ $role | quote }}
+                policy: {{ dict "Version" "2012-10-17" "Statement" $statements | toJson | quote }}
+            {{- end }}
+            {{- end }}
+            {{- $alarmBase := printf "%s%s" $env.namePrefix (regexReplaceAll "[^a-z0-9-]" (lower $topic) "-") }}
+            {{- $users := list }}{{- range $xr.spec.consumers }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "valxel:product" | default "-") (index $tags "valxel:feature" | default "-")
+                  (index $tags "valxel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- range $c := $xr.spec.consumers }}
+            {{- if has "read" (default (list) $c.access) }}
+            {{- /* The catalog's standard alarms for kafka-topic (sdlc-governance platform/aws-resources.yaml), per reading group. */}}
+            {{- $alarms := list
+                  (dict "name" "consumers-behind" "namespace" "AWS/Kafka" "metric" "EstimatedMaxTimeLag" "dimensions" (dict "Cluster Name" $k.clusterName "Consumer Group" $c.component "Topic" $topic)
+                        "statistic" "Maximum" "period" 300 "periods" 3 "above" 300 "severity" "sev2"
+                        "says" "A consumer group is over five minutes behind on this topic; what it keeps (a store, an index, a report) is stale.") }}
+            {{- range $alarms }}
+            ---
+            apiVersion: cloudwatch.aws.m.upbound.io/v1beta1
+            kind: MetricAlarm
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s-%s" $c.component .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s-%s" $alarmBase $c.component .name | quote }}
+            spec:
+              forProvider:
+                region: {{ $env.region | quote }}
+                alarmDescription: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                namespace: {{ .namespace | quote }}
+                metricName: {{ .metric | quote }}
+                dimensions: {{ .dimensions | toJson }}
+                statistic: {{ .statistic }}
+                period: {{ .period }}
+                evaluationPeriods: {{ .periods }}
+                threshold: {{ .above }}
+                comparisonOperator: GreaterThanThreshold
+                treatMissingData: notBreaching
+                {{- with $env.alarmTopicArn }}
+                alarmActions: [{{ . | quote }}]
+                okActions: [{{ . | quote }}]
+                {{- end }}
+                tags:
+                  {{- range $k2, $v := $tags }}
+                  {{ $k2 | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with getComposedResource . "topic" }}
+            {{- if dig "status" "conditions" (list) . }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: EventTopic
+            status:
+              topic: {{ $topic | quote }}
+              bootstrap: {{ $k.bootstrap | quote }}
+              auth: iam
+            {{- end }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready
