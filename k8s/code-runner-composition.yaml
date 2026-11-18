@@ -48,7 +48,8 @@ spec:
             {{- $ns := $xr.metadata.namespace }}
             {{- $sa := default $xr.spec.component $xr.spec.service_account }}
             {{- $warm := get (dict "small" 1 "medium" 3 "large" 6) (default "small" $xr.spec.size) }}
-            {{- $image := required "codeRunner.image is missing from the valxel-aws EnvironmentConfig" (dig "codeRunner" "image" "" $env) }}
+            {{- $image := dig "codeRunner" "image" "" $env }}
+            {{- if not $image }}{{ fail "codeRunner.image is missing from the valxel-aws EnvironmentConfig" }}{{ end }}
             ---
             apiVersion: extensions.agents.x-k8s.io/v1beta1
             kind: SandboxTemplate
