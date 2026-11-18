@@ -1,0 +1,62 @@
+# The sandboxes one code-sandbox component runs code in, as an OpenChoreo ClusterResourceType. Apply on
+# the control plane. The SDLC tool adds one for each code-sandbox component (resources.py); nobody
+# picks it from the catalog. environmentConfigs.size is set per environment by the binding.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: code-runner
+  annotations:
+    openchoreo.dev/description: >-
+      Single-use gVisor sandboxes for one code-sandbox component's runs: the platform's runner, no network, no service account
+      token, read-only root and limits, with a warm pool only that component may claim from.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [component]
+      properties:
+        component:
+          type: string
+          description: The code-sandbox component whose runs these sandboxes take.
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        service_account:
+          type: string
+          description: The component's Kubernetes ServiceAccount; empty means the component's name.
+          default: ""
+        tags:
+          type: object
+          description: Tags (product, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Nothing stored: a sandbox keeps nothing past its run.
+  retainPolicy: Delete
+
+  outputs:
+    - name: pool
+      value: ${applied.instance.status.pool}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.pool)}"
+      template:
+        apiVersion: runtime.platform.valxel.dev/v1alpha1
+        kind: CodeRunner
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          component: ${parameters.component}
+          service_account: ${parameters.service_account}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}
