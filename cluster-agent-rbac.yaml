@@ -1,5 +1,5 @@
 # Lets the OpenChoreo data-plane agent manage this module's composite resources (DynamoTable,
-# KinesisStream, ...), which the ClusterResourceTypes render. Crossplane creates the AWS resources
+# KinesisStream, CodeRunner, ...), which the ClusterResourceTypes render. Crossplane creates the AWS resources
 # behind them under its own permissions. Apply on each data plane. If your agent runs under another
 # ServiceAccount, edit the subject.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -7,7 +7,7 @@ kind: ClusterRole
 metadata:
   name: valxel-platform-resources-agent
 rules:
-  - apiGroups: ["aws.platform.valxel.dev"]
+  - apiGroups: ["aws.platform.valxel.dev", "runtime.platform.valxel.dev"]
     resources: ["*"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---

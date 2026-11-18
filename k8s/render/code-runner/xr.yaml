@@ -1,0 +1,13 @@
+# A CodeRunner as OpenChoreo renders it into a cell namespace: one code-sandbox component's sandboxes.
+apiVersion: runtime.platform.valxel.dev/v1alpha1
+kind: CodeRunner
+metadata:
+  name: emr-calc-sandbox-runner
+  namespace: dp-default-emr-development-5f6e7d8c
+spec:
+  component: emr-calc-sandbox
+  service_account: ""
+  tags:
+    valxel:product: EMR
+    valxel:data-class: phi
+  size: medium

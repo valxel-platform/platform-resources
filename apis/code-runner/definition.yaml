@@ -1,0 +1,50 @@
+# The CodeRunner API: the sandboxes one code-sandbox component (valxel-platform/template-code-sandbox)
+# runs model-written code in. The code-runner ClusterResourceType creates one in the cell namespace
+# for each code-sandbox component; k8s/code-runner-composition.yaml builds what a sandbox is, so the
+# platform owns the isolation and a product owns only its server.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: coderunners.runtime.platform.valxel.dev
+spec:
+  scope: Namespaced
+  group: runtime.platform.valxel.dev
+  names:
+    kind: CodeRunner
+    plural: coderunners
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [component]
+              properties:
+                component:
+                  type: string
+                  description: The code-sandbox component whose runs these sandboxes take.
+                  pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                service_account:
+                  type: string
+                  description: The component's Kubernetes ServiceAccount, the only one that may claim sandboxes; empty means the component's name.
+                  default: ""
+                tags:
+                  type: object
+                  description: Tags (product, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Sandboxes kept ready (small 1, medium 3, large 6).
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                pool:
+                  type: string
+                  description: The warm pool the component claims from (its SANDBOX_SANDBOX_TEMPLATE).

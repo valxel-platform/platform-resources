@@ -1,0 +1,16 @@
+# A filled-in valxel-aws EnvironmentConfig for rendering the in-cluster Compositions (k8s/).
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-aws
+data:
+  accountId: '111111111111'
+  region: us-east-2
+  clusterName: emr-development
+  environment: development
+  namePrefix: vx-
+  # The platform's code runner (valxel-platform/template-code-sandbox, runner-image.yml), by digest.
+  codeRunner:
+    image: ghcr.io/valxel-platform/code-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  tags:
+    valxel:managed-by: crossplane

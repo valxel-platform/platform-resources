@@ -1,0 +1,192 @@
+# Builds a CodeRunner: what a sandbox is, for one code-sandbox component, in its cell namespace.
+#
+# - A SandboxTemplate (Agent Sandbox 1.0): the platform's runner image (codeRunner.image in the
+#   valxel-aws EnvironmentConfig), never the component's own, under gVisor on the gvisor nodes; no
+#   service account token, no service links, read-only root, non-root, no privileges, CPU and memory
+#   limits, a size-limited /tmp. Each sandbox serves one run and is gone.
+# - A SandboxWarmPool keeping sandboxes ready (small 1, medium 3, large 6): runs start in a second.
+# - A Cilium policy: only pods of this cell reach a runner, on its port; no runner reaches another
+#   or anything at all. Deny rules, so no allow added later can open it.
+# - A Role and RoleBinding: only the component's ServiceAccount may create, read and delete
+#   SandboxClaims here.
+#
+# The pool is named <XR name>; status.pool tells the component (its SANDBOX_SANDBOX_TEMPLATE).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: code-runner
+spec:
+  compositeTypeRef:
+    apiVersion: runtime.platform.valxel.dev/v1alpha1
+    kind: CodeRunner
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-aws
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $name := $xr.metadata.name }}
+            {{- $ns := $xr.metadata.namespace }}
+            {{- $sa := default $xr.spec.component $xr.spec.service_account }}
+            {{- $warm := get (dict "small" 1 "medium" 3 "large" 6) (default "small" $xr.spec.size) }}
+            {{- $image := required "codeRunner.image is missing from the valxel-aws EnvironmentConfig" (dig "codeRunner" "image" "" $env) }}
+            ---
+            apiVersion: extensions.agents.x-k8s.io/v1beta1
+            kind: SandboxTemplate
+            metadata:
+              name: {{ $name }}
+              annotations:
+                {{ setResourceNameAnnotation "template" }}
+              labels:
+                valxel.io/code-runner: {{ $name }}
+            spec:
+              networkPolicyManagement: Unmanaged
+              podTemplate:
+                metadata:
+                  labels:
+                    app: code-runner
+                    valxel.io/code-runner: {{ $name }}
+                spec:
+                  runtimeClassName: gvisor
+                  automountServiceAccountToken: false
+                  enableServiceLinks: false
+                  nodeSelector:
+                    valxel.io/runtime: gvisor
+                  tolerations:
+                    - key: valxel.io/runtime
+                      operator: Equal
+                      value: gvisor
+                      effect: NoSchedule
+                  securityContext:
+                    runAsNonRoot: true
+                    runAsUser: 10001
+                    runAsGroup: 10001
+                    seccompProfile:
+                      type: RuntimeDefault
+                  containers:
+                    - name: runner
+                      image: {{ $image | quote }}
+                      command: ["sandbox-runner"]
+                      env:
+                        - name: SANDBOX_RUNNER_PORT
+                          value: "8888"
+                        - name: TMPDIR
+                          value: /tmp
+                      ports:
+                        - name: runner
+                          containerPort: 8888
+                      resources:
+                        requests:
+                          cpu: 250m
+                          memory: 256Mi
+                        limits:
+                          cpu: "1"
+                          memory: 768Mi
+                          ephemeral-storage: 512Mi
+                      securityContext:
+                        allowPrivilegeEscalation: false
+                        readOnlyRootFilesystem: true
+                        capabilities:
+                          drop: ["ALL"]
+                      volumeMounts:
+                        - name: tmp
+                          mountPath: /tmp
+                  volumes:
+                    - name: tmp
+                      emptyDir:
+                        sizeLimit: 256Mi
+            ---
+            apiVersion: extensions.agents.x-k8s.io/v1beta1
+            kind: SandboxWarmPool
+            metadata:
+              name: {{ $name }}
+              annotations:
+                {{ setResourceNameAnnotation "pool" }}
+            spec:
+              replicas: {{ $warm }}
+              sandboxTemplateRef:
+                name: {{ $name }}
+            ---
+            apiVersion: cilium.io/v2
+            kind: CiliumNetworkPolicy
+            metadata:
+              name: {{ $name }}
+              annotations:
+                {{ setResourceNameAnnotation "network" }}
+            spec:
+              endpointSelector:
+                matchLabels:
+                  valxel.io/code-runner: {{ $name }}
+              ingress:
+                - fromEndpoints:
+                    - matchLabels:
+                        k8s:io.kubernetes.pod.namespace: {{ $ns }}
+                  toPorts:
+                    - ports:
+                        - port: "8888"
+                          protocol: TCP
+              ingressDeny:
+                - fromEndpoints:
+                    - matchExpressions:
+                        - key: valxel.io/code-runner
+                          operator: Exists
+              egressDeny:
+                - toEntities: [all]
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: Role
+            metadata:
+              name: {{ $name }}
+              annotations:
+                {{ setResourceNameAnnotation "role" }}
+            rules:
+              - apiGroups: ["extensions.agents.x-k8s.io"]
+                resources: ["sandboxclaims"]
+                verbs: ["create", "get", "delete"]
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: RoleBinding
+            metadata:
+              name: {{ $name }}
+              annotations:
+                {{ setResourceNameAnnotation "binding" }}
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: Role
+              name: {{ $name }}
+            subjects:
+              - kind: ServiceAccount
+                name: {{ $sa }}
+                namespace: {{ $ns }}
+            {{- with getComposedResource . "pool" }}
+            {{- if dig "status" "readyReplicas" 0 . }}
+            ---
+            apiVersion: runtime.platform.valxel.dev/v1alpha1
+            kind: CodeRunner
+            status:
+              pool: {{ $name | quote }}
+            {{- end }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

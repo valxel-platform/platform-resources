@@ -1,0 +1,15 @@
+# The warm pool once its sandboxes are ready: the CodeRunner then reports its pool.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: emr-calc-sandbox-runner
+  namespace: dp-default-emr-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: pool
+spec:
+  replicas: 3
+  sandboxTemplateRef:
+    name: emr-calc-sandbox-runner
+status:
+  replicas: 3
+  readyReplicas: 3

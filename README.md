@@ -22,8 +22,26 @@ service and binds it to each environment. This repo is what turns those Resource
 | `kafka-user` | One component's Kafka identity: nothing on MSK (IAM through its workload identity), a SCRAM user on Strimzi whose password is a Secret in its own namespace | no |
 | `workload-identity` | One component's IAM role, trusted only through EKS Pod Identity for its ServiceAccount, under the permissions boundary | no |
 
-Every type is encrypted with the product's KMS key and tagged with product, feature and data class,
+Every AWS type is encrypted with the product's KMS key and tagged with product, feature and data class,
 and comes with the catalog's standard CloudWatch alarms (see [Alarms](#alarms)).
+
+## Code runners
+
+`code-runner` isn't an AWS service and isn't in the catalog: the SDLC tool adds one for each
+code-sandbox component (valxel-platform/template-code-sandbox), and
+`k8s/code-runner-composition.yaml` builds, in the component's cell namespace, what its sandboxes are:
+
+- an Agent Sandbox 1.0 `SandboxTemplate` running the platform's runner image (`codeRunner.image` in
+  `valxel-aws`, a digest of `ghcr.io/valxel-platform/code-runner`), never the component's own: under
+  gVisor on the gvisor nodes, no service account token, read-only root, non-root, limits;
+- a `SandboxWarmPool` (small 1, medium 3, large 6 ready), named after the resource and reported as
+  `status.pool`, the component's `SANDBOX_SANDBOX_TEMPLATE`;
+- a Cilium policy with deny rules: only the cell's pods reach a runner, no runner reaches another,
+  and no runner reaches anything;
+- a Role letting only the component's ServiceAccount create, read and delete `SandboxClaims` there.
+
+Each data plane installs the Composition, `k8s/crossplane-rbac.yaml` (what Crossplane needs to build
+it) and Agent Sandbox with the gvisor RuntimeClass (platform-foundation).
 
 ## Kafka topics
 
