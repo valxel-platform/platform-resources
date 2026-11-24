@@ -1,0 +1,256 @@
+# Builds an EventStream as an Azure Event Hubs namespace (Standard) and event hub of its own, with a
+# consumer group per reader (constitution VX-19, catalog type event-stream on Azure).
+#
+#   EventHubNamespace   throughput units by size (auto-inflate on medium and large), SAS keys off,
+#                       public network off, TLS 1.2
+#   EventHub            retention_hours rounded up to days (Standard keeps up to 7)
+#   ConsumerGroup       one per reader, named after it
+#   PrivateEndpoint     in the data plane's endpoints subnet, with the private DNS zone
+#   RoleAssignment      Event Hubs Data Sender or Receiver per consumer, on this event hub only
+#   MonitorMetricAlert  the catalog's alarm: throttled requests
+#
+# status.stream is <namespace>.servicebus.windows.net/<hub>. Never deleted with its binding.
+# Settings come from the data plane's valxel-azure EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: event-stream-azure
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: EventStream
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-azure
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $hash := printf "%s/%s" $xr.metadata.namespace $xr.metadata.name | sha256sum | trunc 12 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+            {{- $short := regexReplaceAll "[^a-z0-9]" (lower ($xr.metadata.name | trimPrefix "r-")) "" | trunc 10 }}
+            {{- /* Globally unique names: the prefix, a little of the resource's name, and a hash of its namespace and name. */}}
+            {{- $base := printf "%s-%s-%s" $env.namePrefix ($xr.metadata.name | trimPrefix "r-" | lower | trunc 20 | trimSuffix "-") $hash }}
+            {{- $rg := printf "/subscriptions/%s/resourceGroups/%s" $env.subscription $env.resourceGroup }}
+            {{- /* Each consumer's managed identity (its workload-identity), looked up by its labels. */}}
+            {{- $principal := dict }}
+            {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+            {{- $found := index (default (dict) $.extraResources) (printf "identity-%d" $i) }}
+            {{- range (default (list) (dig "items" (list) (default (dict) $found))) }}
+            {{- with dig "resource" "status" "atProvider" "principalId" "" . }}{{- $_ := set $principal $c.component . }}{{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $xr.spec.consumers }}
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+              identity-{{ $i }}:
+                apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+                kind: UserAssignedIdentity
+                matchLabels:
+                  valxel.dev/component: {{ $c.component | quote }}
+                  valxel.dev/namespace-hash: {{ $nsHash | quote }}
+              {{- end }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "valxel:product" | default "-") (index $tags "valxel:feature" | default "-")
+                  (index $tags "valxel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $name := $base | trunc 50 | trimSuffix "-" }}
+            {{- $nsId := printf "%s/providers/Microsoft.EventHub/namespaces/%s" $rg $name }}
+            {{- $hubId := printf "%s/eventhubs/stream" $nsId }}
+            {{- $size := default "small" $xr.spec.size }}
+            {{- $tu := index (dict "small" 1 "medium" 2 "large" 4) $size | default 1 }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "hub" }}{{- $ready = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
+            ---
+            apiVersion: eventhub.azure.m.upbound.io/v1beta1
+            kind: EventHubNamespace
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "namespace" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                sku: Standard
+                capacity: {{ $tu }}
+                {{- if ne $size "small" }}
+                autoInflateEnabled: true
+                maximumThroughputUnits: {{ mul $tu 5 }}
+                {{- end }}
+                localAuthenticationEnabled: false
+                publicNetworkAccessEnabled: false
+                minimumTlsVersion: "1.2"
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: eventhub.azure.m.upbound.io/v1beta1
+            kind: EventHub
+            metadata:
+              name: {{ printf "%s-stream" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "hub" }}
+                crossplane.io/external-name: stream
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                namespaceId: {{ $nsId | quote }}
+                partitionCount: {{ ternary 8 4 (ne $size "small") }}
+                messageRetention: {{ min 7 (div (add (default 24 $xr.spec.retention_hours) 23) 24) }}
+            {{- range $xr.spec.consumers }}
+            {{- if has "read" (default (list) .access) }}
+            ---
+            apiVersion: eventhub.azure.m.upbound.io/v1beta1
+            kind: ConsumerGroup
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "group-%s" .component) }}
+                crossplane.io/external-name: {{ .component | quote }}
+            spec:
+              forProvider:
+                namespaceName: {{ $name | quote }}
+                eventhubName: stream
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+            {{- end }}
+            {{- end }}
+            ---
+            apiVersion: network.azure.m.upbound.io/v1beta1
+            kind: PrivateEndpoint
+            metadata:
+              name: {{ printf "%s-pe" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "private-endpoint" }}
+                crossplane.io/external-name: {{ printf "%s-pe" $base | quote }}
+            spec:
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                subnetId: {{ $env.privateEndpointSubnetId | quote }}
+                privateServiceConnection:
+                  name: {{ printf "%s-pe" $base | quote }}
+                  isManualConnection: false
+                  privateConnectionResourceId: {{ $nsId | quote }}
+                  subresourceNames: [namespace]
+                privateDnsZoneGroup:
+                  name: default
+                  privateDnsZoneIds: [{{ index $env.privateDnsZones "eventhub" | quote }}]
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- $pid := index $principal $c.component | default "" }}
+            {{- if $pid }}
+            {{- range (default (list) $c.actions) }}
+            {{- if hasPrefix "role:" . }}
+            {{- $role := trimPrefix "role:" . }}
+            {{- $h := printf "%s|%s|%s" $hubId $role $pid | sha256sum }}
+            ---
+            apiVersion: authorization.azure.m.upbound.io/v1beta1
+            kind: RoleAssignment
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component ($h | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component ($h | trunc 6)) }}
+            spec:
+              forProvider:
+                name: {{ printf "%s-%s-4%s-a%s-%s" (substr 0 8 $h) (substr 8 12 $h) (substr 13 16 $h) (substr 17 20 $h) (substr 20 32 $h) | quote }}
+                scope: {{ $hubId | quote }}
+                roleDefinitionName: {{ $role | quote }}
+                principalId: {{ $pid | quote }}
+                principalType: ServicePrincipal
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- /* The catalog's standard alarms for event-stream on Azure (sdlc-governance platform/catalog.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "throttled" "metric" "ThrottledRequests" "aggregation" "Total"
+                        "period" 300 "periods" 2 "above" 0 "severity" "sev3"
+                        "says" "Requests are throttled: the namespace needs more throughput units.") }}
+            {{- if $env.alarmActionGroup }}
+            {{- $freq := dict "60" "PT1M" "300" "PT5M" "900" "PT15M" "1800" "PT30M" "3600" "PT1H" }}
+            {{- range $alarms }}
+            {{- $span := mul .period .periods }}
+            {{- $window := "PT1M" }}
+            {{- if gt $span 43200 }}{{ $window = "P1D" }}{{- else if gt $span 21600 }}{{ $window = "PT12H" }}{{- else if gt $span 3600 }}{{ $window = "PT6H" }}{{- else if gt $span 1800 }}{{ $window = "PT1H" }}{{- else if gt $span 900 }}{{ $window = "PT30M" }}{{- else if gt $span 300 }}{{ $window = "PT15M" }}{{- else if gt $span 60 }}{{ $window = "PT5M" }}{{- end }}
+            ---
+            apiVersion: insights.azure.m.upbound.io/v1beta1
+            kind: MonitorMetricAlert
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $base .name | quote }}
+            spec:
+              forProvider:
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                scopes: [{{ $nsId | quote }}]
+                description: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                severity: {{ index (dict "sev1" "0" "sev2" "1" "sev3" "2" "sev4" "3") .severity | default "2" }}
+                frequency: {{ index $freq (toString .period) | default "PT5M" | quote }}
+                windowSize: {{ $window | quote }}
+                autoMitigate: true
+                criteria:
+                  - metricNamespace: Microsoft.EventHub/namespaces
+                    metricName: {{ .metric | quote }}
+                    aggregation: {{ .aggregation | quote }}
+                    operator: GreaterThan
+                    threshold: {{ .above }}
+                    {{- with .where }}
+                    {{- $kv := splitList "=" . }}
+                    dimension:
+                      - name: {{ index $kv 0 | quote }}
+                        operator: Include
+                        values: [{{ index $kv 1 | quote }}]
+                    {{- end }}
+                action:
+                  - actionGroupId: {{ $env.alarmActionGroup | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: EventStream
+            status:
+              stream: {{ printf "%s.servicebus.windows.net/stream" $name | quote }}
+              id: {{ $hubId | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

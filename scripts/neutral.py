@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GROUP = "platform.valxel.dev"
 ACTIONS = '{type: string, pattern: "^[a-z0-9-]+:[A-Za-z*]+$"}'
-ACTIONS_ANY = '{type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+)$"}'
+ACTIONS_ANY = '{type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+|(role|cosmos):[A-Za-z -]+)$"}'
 
 # old type: (new type, old kind, new kind, old plural, new plural, {old status: [new status...]},
 #            {old output: new output})
@@ -59,10 +59,10 @@ def xrd(old: str) -> str:
     t = t.replace(f"name: {op}.aws.platform.valxel.dev", f"name: {np}.{GROUP}")
     t = t.replace("group: aws.platform.valxel.dev", f"group: {GROUP}")
     t = t.replace(f"kind: {ok}\n", f"kind: {nk}\n").replace(f"plural: {op}\n", f"plural: {np}\n")
-    t = t.replace(f"aws/{old}-composition.yaml builds it", f"aws/{new}-composition.yaml and gcp/{new}-composition.yaml build it")
+    t = t.replace(f"aws/{old}-composition.yaml builds it", f"aws/, gcp/ and azure/{new}-composition.yaml build it")
     t = t.replace(f"The {ok} API:", f"The {nk} API (the {new} type, built as {old} on AWS):")
     t = t.replace(f"The {old} ClusterResourceType", f"The {new} ClusterResourceType")
-    t = t.replace(ACTIONS, ACTIONS_ANY).replace("IAM actions each may take", "access each is given (IAM actions on AWS, roles on Google Cloud)")
+    t = t.replace(ACTIONS, ACTIONS_ANY).replace("IAM actions each may take", "access each is given (IAM actions on AWS, roles on Google Cloud and Azure)")
     return HEADER.format(src=f"apis/{old}/definition.yaml") + _status_fields(t, status)
 
 
@@ -72,7 +72,7 @@ def resource_type(old: str) -> str:
     t = t.replace(f"  name: {old}\n", f"  name: {new}\n")
     t = t.replace("apiVersion: aws.platform.valxel.dev/v1alpha1", f"apiVersion: {GROUP}/v1alpha1")
     t = t.replace(f"kind: {ok}\n", f"kind: {nk}\n")
-    t = t.replace(ACTIONS, ACTIONS_ANY).replace("IAM actions each may take", "access each is given (IAM actions on AWS, roles on Google Cloud)")
+    t = t.replace(ACTIONS, ACTIONS_ANY).replace("IAM actions each may take", "access each is given (IAM actions on AWS, roles on Google Cloud and Azure)")
     # Outputs and readiness by the neutral status names; a queue sends to and receives from its URL.
     out_head, _, rest = t.partition("  outputs:\n")
     outs, _, rest = rest.partition("\n  resources:\n")

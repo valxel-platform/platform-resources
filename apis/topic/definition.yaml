@@ -1,6 +1,6 @@
 # Written by scripts/neutral.py from apis/sns-topic/definition.yaml: change that file and run the script, not this one.
 # The Topic API (the topic type, built as sns-topic on AWS): An Amazon SNS topic. The topic ClusterResourceType creates one in the cell namespace of
-# each environment it is bound to; aws/topic-composition.yaml and gcp/topic-composition.yaml build it. Install on every data plane.
+# each environment it is bound to; aws/, gcp/ and azure/topic-composition.yaml build it. Install on every data plane.
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
@@ -29,7 +29,7 @@ spec:
                 consumers:
                   type: array
                   description: >-
-                    The components that use it and the access each is given (IAM actions on AWS, roles on Google Cloud) on it, from the
+                    The components that use it and the access each is given (IAM actions on AWS, roles on Google Cloud and Azure) on it, from the
                     platform catalog's access (written by the SDLC tool from the approved design).
                   default: []
                   items:
@@ -44,7 +44,7 @@ spec:
                         items: {type: string, enum: [read, write, delete]}
                       actions:
                         type: array
-                        items: {type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+)$"}
+                        items: {type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+|(role|cosmos):[A-Za-z -]+)$"}
                 tags:
                   type: object
                   description: Tags for the AWS resources (product, feature, data class).

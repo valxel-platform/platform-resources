@@ -57,8 +57,8 @@ def doc(path: Path) -> dict:
 
 
 def flavour(kind: str, cloud: str) -> str:
-    """The directory of a type's Composition on a cloud: Kafka on Google Cloud is Strimzi."""
-    return "strimzi" if cloud == "gcp" and kind in KAFKA else cloud
+    """The directory of a type's Composition on a cloud: Kafka on Google Cloud and Azure is Strimzi."""
+    return "strimzi" if cloud in ("gcp", "azure") and kind in KAFKA else cloud
 
 
 def block(kind: str, cloud: str) -> dict:
@@ -146,9 +146,13 @@ def test_stored_data_is_never_deleted_with_its_binding(kind, cloud):
         assert rt["spec"]["retainPolicy"] == "Retain"
         # Crossplane v2 namespaced resources: no Delete in managementPolicies keeps the cloud resource.
         assert 'managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]' in comp
-    # Kafka encrypts at rest with the cluster's key, not per topic; identities hold no data.
-    key = {"aws": "kmsKeyArn", "gcp": "kmsKeyName"}[cloud]
-    assert key in comp or kind in ("workload-identity", *KAFKA), f"{kind} on {cloud}: not encrypted with the product key"
+    # Kafka encrypts at rest with the cluster's key, not per topic; identities hold no data. On Azure,
+    # Event Hubs and Service Bus Standard take no customer-managed key (the catalog says so).
+    key = {"aws": "kmsKeyArn", "gcp": "kmsKeyName", "azure": "keyVaultKeyId"}[cloud]
+    exempt = ("workload-identity", *KAFKA) + (("event-stream", "queue", "topic") if cloud == "azure" else ())
+    if kind in exempt and cloud == "azure":
+        assert "Microsoft-managed" in str(block(kind, cloud).get("built_in")) or kind in ("workload-identity", *KAFKA)
+    assert key in comp or kind in exempt, f"{kind} on {cloud}: not encrypted with the product key"
 
 
 @pytest.mark.parametrize(("kind", "cloud"), [(k, c) for k, c in ON if block(k, c).get("access")])
@@ -156,6 +160,11 @@ def test_catalog_access_belongs_to_the_service(kind, cloud):
     if cloud == "gcp":
         prefix = {"key-value-table": "roles/datastore.", "event-stream": "roles/pubsub.", "queue": "roles/pubsub.",
                   "object-bucket": "roles/storage.", "topic": "roles/pubsub."}[kind]
+        ok = lambda a: a.startswith(prefix)  # noqa: E731
+    elif cloud == "azure":
+        prefix = {"key-value-table": "cosmos:Cosmos DB Built-in Data ", "event-stream": "role:Azure Event Hubs Data ",
+                  "queue": "role:Azure Service Bus Data ", "object-bucket": "role:Storage Blob Data ",
+                  "topic": "role:Azure Service Bus Data "}[kind]
         ok = lambda a: a.startswith(prefix)  # noqa: E731
     else:
         prefix = {"key-value-table": "dynamodb", "event-stream": "kinesis", "queue": "sqs", "object-bucket": "s3",
@@ -196,6 +205,9 @@ def test_every_resource_gets_its_catalog_alarms(kind, cloud):
         if cloud == "aws":
             assert g["namespace"] == b["cloudwatch_namespace"] and g["statistic"] == a["statistic"], f"{kind}/{name}"
             assert g["dimensions"].startswith("(dict "), f"{kind}/{name}: alarms need the resource's dimensions"
+        elif cloud == "azure":
+            assert (g["aggregation"], g.get("where", "")) == (a["aggregation"], a.get("where", "")), f"{kind}/{name}"
+            assert f"metricNamespace: {b['monitor_namespace']}" in comp, f"{kind}/{name}: metric namespace"
         else:
             assert g["aligner"] == a["aligner"], f"{kind}/{name}: aligner"
             assert "filter" in g, f"{kind}/{name}: alert policies need the resource's filter"
@@ -203,9 +215,9 @@ def test_every_resource_gets_its_catalog_alarms(kind, cloud):
     # which AlarmRouting's EventBridge rule matches; on Google Cloud sent to AlarmRouting's channel.
     if want:
         assert "valxel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
-        assert "$alarmBase" in comp if cloud == "aws" else "$env.alarmChannel" in comp
+        assert {"aws": "$alarmBase", "gcp": "$env.alarmChannel", "azure": "$env.alarmActionGroup"}[cloud] in comp
     else:
-        assert "kind: MetricAlarm" not in comp and "kind: AlertPolicy" not in comp
+        assert not any(f"kind: {k}" in comp for k in ("MetricAlarm", "AlertPolicy", "MonitorMetricAlert"))
 
 
 @pytest.mark.parametrize("kind", KAFKA)
@@ -267,3 +279,18 @@ def test_google_cloud_access_goes_to_each_component_s_own_service_account():
         comp = (ROOT / f"gcp/{kind}-composition.yaml").read_text()
         assert 'printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24' in comp, kind
         assert "index $member $c.component" in comp, kind
+
+
+def test_azure_access_goes_to_each_component_s_own_identity():
+    """Every azure/ Composition assigns roles to the managed identity workload-identity makes for the
+    component, which it finds by the labels workload-identity puts on it."""
+    wi = (ROOT / "azure/workload-identity-composition.yaml").read_text()
+    assert "valxel.dev/component: {{ $xr.spec.component | quote }}" in wi
+    assert "valxel.dev/namespace-hash: {{ $nsHash | quote }}" in wi and "api://AzureADTokenExchange" in wi
+    for kind in ("key-value-table", "event-stream", "queue", "object-bucket", "topic"):
+        comp = (ROOT / f"azure/{kind}-composition.yaml").read_text()
+        assert "kind: ExtraResources" in comp and "valxel.dev/component: {{ $c.component | quote }}" in comp, kind
+        assert "principalId: {{ $pid | quote }}" in comp, kind
+    routing = (ROOT / "azure/alarm-routing-composition.yaml").read_text()
+    assert "useCommonAlertSchema: true" in routing and '"/signals/azure-monitor"' in routing
+    assert "provider-azure-insights:" in (ROOT / "azure/provider.yaml").read_text()

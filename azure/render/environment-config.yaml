@@ -1,0 +1,76 @@
+# A filled-in valxel-azure EnvironmentConfig for rendering the Compositions, and what the
+# Compositions look up besides: components' managed identities (by label) and the signals token.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-azure
+data:
+  subscription: 1b2c3d4e-0000-4000-8000-00000000aa01
+  location: eastus
+  resourceGroup: vx-agtech-development
+  environment: development
+  namePrefix: vx
+  keyVaultKeyId: https://vx-agtech-dev.vault.azure.net/keys/product
+  cmkIdentityId: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.ManagedIdentity/userAssignedIdentities/vx-cmk
+  oidcIssuer: https://eastus.oic.prod-aks.azure.com/9a8b7c6d-0000-4000-8000-0000000000ff/5e6f7a8b-0000-4000-8000-000000000001/
+  privateEndpointSubnetId: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Network/virtualNetworks/vx/subnets/endpoints
+  privateDnsZones:
+    cosmos: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Network/privateDnsZones/privatelink.documents.azure.com
+    blob: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net
+    eventhub: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net
+  postgresSubnetId: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Network/virtualNetworks/vx/subnets/postgres
+  postgresDnsZoneId: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Network/privateDnsZones/vx-agtech-development.postgres.database.azure.com
+  alarmActionGroup: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Insights/actionGroups/vx-valxel-sdlc
+  tags:
+    valxel:managed-by: crossplane
+---
+apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+kind: UserAssignedIdentity
+metadata:
+  name: agtech-field-api-identity-elsewhere
+  namespace: dp-default-agtech-development-5f6e7d8c
+  labels:
+    valxel.dev/component: agtech-field-api
+    valxel.dev/namespace-hash: 54dbc034
+status:
+  atProvider:
+    clientId: 7c1d2e3f-0000-4000-8000-00000000c000
+    principalId: 8d2e3f4a-0000-4000-8000-00000000d000
+
+---
+apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+kind: UserAssignedIdentity
+metadata:
+  name: agtech-field-worker-identity-elsewhere
+  namespace: dp-default-agtech-development-5f6e7d8c
+  labels:
+    valxel.dev/component: agtech-field-worker
+    valxel.dev/namespace-hash: 54dbc034
+status:
+  atProvider:
+    clientId: 7c1d2e3f-0000-4000-8000-00000000c001
+    principalId: 8d2e3f4a-0000-4000-8000-00000000d001
+
+---
+apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+kind: UserAssignedIdentity
+metadata:
+  name: agtech-sensor-api-identity-elsewhere
+  namespace: dp-default-agtech-development-5f6e7d8c
+  labels:
+    valxel.dev/component: agtech-sensor-api
+    valxel.dev/namespace-hash: 54dbc034
+status:
+  atProvider:
+    clientId: 7c1d2e3f-0000-4000-8000-00000000c002
+    principalId: 8d2e3f4a-0000-4000-8000-00000000d002
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: valxel-signals-token
+  namespace: crossplane-system
+type: Opaque
+data:
+  token: dnhzX3JlbmRlci1maXh0dXJlLW5vdC1hLXJlYWwtdG9rZW4=

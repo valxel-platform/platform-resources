@@ -1,0 +1,17 @@
+# The identity as the provider reports it once made, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+kind: UserAssignedIdentity
+metadata:
+  name: r-agtech-field-api-identity-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: identity
+status:
+  atProvider:
+    clientId: 7c1d2e3f-0000-4000-8000-0000000000c1
+    principalId: 8d2e3f4a-0000-4000-8000-0000000000d1
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-24T00:00:00Z'

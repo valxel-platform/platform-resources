@@ -1,0 +1,19 @@
+# A Topic as OpenChoreo renders it into a cell namespace on an Azure data plane, tags as the SDLC tool writes them, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: Topic
+metadata:
+  name: r-alerts-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  fifo: false
+  consumers:
+  - component: agtech-field-api
+    access:
+    - write
+    actions:
+    - role:Azure Service Bus Data Sender
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small

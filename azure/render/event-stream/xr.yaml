@@ -1,0 +1,24 @@
+# A EventStream as OpenChoreo renders it into a cell namespace on an Azure data plane, tags as the SDLC tool writes them, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: EventStream
+metadata:
+  name: r-readings-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  retention_hours: 168
+  consumers:
+  - component: agtech-sensor-api
+    access:
+    - write
+    actions:
+    - role:Azure Event Hubs Data Sender
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - role:Azure Event Hubs Data Receiver
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: medium

@@ -1,0 +1,16 @@
+# The composed resources as the provider reports them once Azure has finished: pass with --observed-resources to render a later reconcile, where the XR gets its outputs, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: servicebus.azure.m.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: r-jobs-development-1a2b3c4d-queue
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: queue
+status:
+  atProvider:
+    id: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.ServiceBus/namespaces/vx-jobs-development-1a2-3f0d5ce88681/queues/queue
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-24T00:00:00Z'

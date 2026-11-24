@@ -1,0 +1,299 @@
+# Builds a KeyValueTable as an Azure Cosmos DB for NoSQL account of its own (constitution VX-19,
+# catalog type key-value-table on Azure): database `data`, container `items` partitioned by the
+# partition key (and sort key, as a hierarchical key), composite indexes per `indexes` entry,
+# per-item TTL (the item's `ttl` field) when ttl_attribute is set.
+#
+#   Account             serverless (autoscale when large), continuous backup, keys off, public
+#                       network off, customer-managed key (the product's) through the CMK identity
+#   SQLDatabase, SQLContainer
+#   PrivateEndpoint     in the data plane's endpoints subnet, with the private DNS zone
+#   SQLRoleAssignment   Cosmos DB's data roles (cosmos:<role>) per consumer's managed identity
+#   MonitorMetricAlert  the catalog's alarm: throttled requests
+#
+# status.table is the container's address, https://<account>.documents.azure.com/dbs/data/colls/items.
+# Never deleted with its binding: no Delete in managementPolicies.
+# Settings come from the data plane's valxel-azure EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: key-value-table-azure
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: KeyValueTable
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-azure
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $hash := printf "%s/%s" $xr.metadata.namespace $xr.metadata.name | sha256sum | trunc 12 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+            {{- $short := regexReplaceAll "[^a-z0-9]" (lower ($xr.metadata.name | trimPrefix "r-")) "" | trunc 10 }}
+            {{- /* Globally unique names: the prefix, a little of the resource's name, and a hash of its namespace and name. */}}
+            {{- $base := printf "%s-%s-%s" $env.namePrefix ($xr.metadata.name | trimPrefix "r-" | lower | trunc 20 | trimSuffix "-") $hash }}
+            {{- $rg := printf "/subscriptions/%s/resourceGroups/%s" $env.subscription $env.resourceGroup }}
+            {{- /* Each consumer's managed identity (its workload-identity), looked up by its labels. */}}
+            {{- $principal := dict }}
+            {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+            {{- $found := index (default (dict) $.extraResources) (printf "identity-%d" $i) }}
+            {{- range (default (list) (dig "items" (list) (default (dict) $found))) }}
+            {{- with dig "resource" "status" "atProvider" "principalId" "" . }}{{- $_ := set $principal $c.component . }}{{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $xr.spec.consumers }}
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+              identity-{{ $i }}:
+                apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+                kind: UserAssignedIdentity
+                matchLabels:
+                  valxel.dev/component: {{ $c.component | quote }}
+                  valxel.dev/namespace-hash: {{ $nsHash | quote }}
+              {{- end }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "valxel:product" | default "-") (index $tags "valxel:feature" | default "-")
+                  (index $tags "valxel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $name := $base | trunc 44 | trimSuffix "-" }}
+            {{- $acct := printf "%s/providers/Microsoft.DocumentDB/databaseAccounts/%s" $rg $name }}
+            {{- $large := eq (default "small" $xr.spec.size) "large" }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "container" }}{{- $ready = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
+            ---
+            apiVersion: cosmosdb.azure.m.upbound.io/v1beta1
+            kind: Account
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "account" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                offerType: Standard
+                kind: GlobalDocumentDB
+                consistencyPolicy:
+                  consistencyLevel: Session
+                geoLocation:
+                  - location: {{ $env.location | quote }}
+                    failoverPriority: 0
+                {{- if not $large }}
+                capabilities:
+                  - name: EnableServerless
+                {{- end }}
+                backup:
+                  type: Continuous
+                  tier: Continuous7Days
+                localAuthenticationDisabled: true
+                publicNetworkAccessEnabled: false
+                minimalTlsVersion: Tls12
+                keyVaultKeyId: {{ $env.keyVaultKeyId | quote }}
+                defaultIdentityType: {{ printf "UserAssignedIdentity=%s" $env.cmkIdentityId | quote }}
+                identity:
+                  type: UserAssigned
+                  identityIds: [{{ $env.cmkIdentityId | quote }}]
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: cosmosdb.azure.m.upbound.io/v1beta1
+            kind: SQLDatabase
+            metadata:
+              name: {{ printf "%s-data" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "database" }}
+                crossplane.io/external-name: data
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                accountName: {{ $name | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+            ---
+            apiVersion: cosmosdb.azure.m.upbound.io/v1beta1
+            kind: SQLContainer
+            metadata:
+              name: {{ printf "%s-items" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "container" }}
+                crossplane.io/external-name: items
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                accountName: {{ $name | quote }}
+                databaseName: data
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                {{- if $xr.spec.sort_key }}
+                partitionKeyKind: MultiHash
+                partitionKeyVersion: 2
+                partitionKeyPaths: [{{ printf "/%s" $xr.spec.partition_key | quote }}, {{ printf "/%s" $xr.spec.sort_key | quote }}]
+                {{- else }}
+                partitionKeyPaths: [{{ printf "/%s" $xr.spec.partition_key | quote }}]
+                {{- end }}
+                {{- if $xr.spec.ttl_attribute }}
+                defaultTtl: -1
+                {{- end }}
+                {{- if $large }}
+                autoscaleSettings:
+                  maxThroughput: 4000
+                {{- end }}
+                indexingPolicy:
+                  indexingMode: consistent
+                  includedPath:
+                    - path: "/*"
+                  {{- $composite := list }}
+                  {{- range (default (list) $xr.spec.indexes) }}
+                  {{- $parts := rest (splitList ":" .) }}
+                  {{- if gt (len $parts) 1 }}{{- $composite = append $composite $parts }}{{- end }}
+                  {{- end }}
+                  {{- with $composite }}
+                  compositeIndex:
+                    {{- range . }}
+                    - index:
+                        {{- range . }}
+                        - path: {{ printf "/%s" . | quote }}
+                          order: Ascending
+                        {{- end }}
+                    {{- end }}
+                  {{- end }}
+            ---
+            apiVersion: network.azure.m.upbound.io/v1beta1
+            kind: PrivateEndpoint
+            metadata:
+              name: {{ printf "%s-pe" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "private-endpoint" }}
+                crossplane.io/external-name: {{ printf "%s-pe" $base | quote }}
+            spec:
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                subnetId: {{ $env.privateEndpointSubnetId | quote }}
+                privateServiceConnection:
+                  name: {{ printf "%s-pe" $base | quote }}
+                  isManualConnection: false
+                  privateConnectionResourceId: {{ $acct | quote }}
+                  subresourceNames: [Sql]
+                privateDnsZoneGroup:
+                  name: default
+                  privateDnsZoneIds: [{{ index $env.privateDnsZones "cosmos" | quote }}]
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- $pid := index $principal $c.component | default "" }}
+            {{- if $pid }}
+            {{- range (default (list) $c.actions) }}
+            {{- if hasPrefix "cosmos:" . }}
+            {{- $roleId := ternary "00000000-0000-0000-0000-000000000002" "00000000-0000-0000-0000-000000000001" (contains "Contributor" .) }}
+            {{- $h := printf "%s|%s|%s" $acct $roleId $pid | sha256sum }}
+            ---
+            apiVersion: cosmosdb.azure.m.upbound.io/v1beta1
+            kind: SQLRoleAssignment
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component ($h | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component ($h | trunc 6)) }}
+            spec:
+              forProvider:
+                name: {{ printf "%s-%s-4%s-a%s-%s" (substr 0 8 $h) (substr 8 12 $h) (substr 13 16 $h) (substr 17 20 $h) (substr 20 32 $h) | quote }}
+                accountName: {{ $name | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                roleDefinitionId: {{ printf "%s/sqlRoleDefinitions/%s" $acct $roleId | quote }}
+                principalId: {{ $pid | quote }}
+                scope: {{ $acct | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- /* The catalog's standard alarms for key-value-table on Azure (sdlc-governance platform/catalog.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "throttled" "metric" "TotalRequests" "where" "StatusCode=429" "aggregation" "Count"
+                        "period" 300 "periods" 2 "above" 0 "severity" "sev3"
+                        "says" "Requests are throttled (429): the account needs more RU/s, or one partition key is too hot.") }}
+            {{- if $env.alarmActionGroup }}
+            {{- $freq := dict "60" "PT1M" "300" "PT5M" "900" "PT15M" "1800" "PT30M" "3600" "PT1H" }}
+            {{- range $alarms }}
+            {{- $span := mul .period .periods }}
+            {{- $window := "PT1M" }}
+            {{- if gt $span 43200 }}{{ $window = "P1D" }}{{- else if gt $span 21600 }}{{ $window = "PT12H" }}{{- else if gt $span 3600 }}{{ $window = "PT6H" }}{{- else if gt $span 1800 }}{{ $window = "PT1H" }}{{- else if gt $span 900 }}{{ $window = "PT30M" }}{{- else if gt $span 300 }}{{ $window = "PT15M" }}{{- else if gt $span 60 }}{{ $window = "PT5M" }}{{- end }}
+            ---
+            apiVersion: insights.azure.m.upbound.io/v1beta1
+            kind: MonitorMetricAlert
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $base .name | quote }}
+            spec:
+              forProvider:
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                scopes: [{{ $acct | quote }}]
+                description: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                severity: {{ index (dict "sev1" "0" "sev2" "1" "sev3" "2" "sev4" "3") .severity | default "2" }}
+                frequency: {{ index $freq (toString .period) | default "PT5M" | quote }}
+                windowSize: {{ $window | quote }}
+                autoMitigate: true
+                criteria:
+                  - metricNamespace: Microsoft.DocumentDB/databaseAccounts
+                    metricName: {{ .metric | quote }}
+                    aggregation: {{ .aggregation | quote }}
+                    operator: GreaterThan
+                    threshold: {{ .above }}
+                    {{- with .where }}
+                    {{- $kv := splitList "=" . }}
+                    dimension:
+                      - name: {{ index $kv 0 | quote }}
+                        operator: Include
+                        values: [{{ index $kv 1 | quote }}]
+                    {{- end }}
+                action:
+                  - actionGroupId: {{ $env.alarmActionGroup | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: KeyValueTable
+            status:
+              table: {{ printf "https://%s.documents.azure.com/dbs/data/colls/items" $name | quote }}
+              id: {{ $acct | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

@@ -1,6 +1,6 @@
 # Required check: render. It checks the module against the platform catalog, renders every
 # Composition with Crossplane (first reconcile and after the cloud reports), and validates what they
-# compose against the AWS and Google Cloud providers' schemas and this module's XRDs.
+# compose against the AWS, Google Cloud and Azure providers' schemas and this module's XRDs.
 name: ci
 
 on:
@@ -52,9 +52,10 @@ jobs:
               || crossplane render "$xr" "$comp" functions.yaml --xrd "$xrd" \
                 --extra-resources "$settings" "$@"
           }
-          # aws/: every type on AWS (MSK for Kafka). gcp/: every type on Google Cloud but Kafka.
-          # strimzi/: the Kafka types outside AWS production. k8s/: in-cluster objects (code-runner).
-          for flavour in aws gcp strimzi k8s; do
+          # aws/: every type on AWS (MSK for Kafka). gcp/ and azure/: every type on Google Cloud and
+          # Azure but Kafka. strimzi/: the Kafka types outside AWS production. k8s/: in-cluster
+          # objects (code-runner).
+          for flavour in aws gcp azure strimzi k8s; do
             for dir in $flavour/render/*/; do
               kind=$(basename "$dir")
               settings=$flavour/render/environment-config.yaml
@@ -72,7 +73,7 @@ jobs:
       - name: Validate against the provider and XRD schemas
         run: |
           # One YAML stream: each file's documents, separated.
-          for f in aws/provider.yaml gcp/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
+          for f in aws/provider.yaml gcp/provider.yaml azure/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
           # Validate what the Compositions compose. The XRs are this module's own inputs; the
           # tests check them against the XRDs and the catalog.
           python3 - <<'PY'
@@ -84,6 +85,7 @@ jobs:
                   yaml.safe_dump_all(docs, f, sort_keys=False)
           PY
           # The CLI moved validate under `resource`; older ones have it under `beta`.
+          set -o pipefail  # a failed validation fails the step, through tee
           # A missing schema fails too, but for Cilium's policies (the data plane's CNI, no package).
           if crossplane resource validate --help >/dev/null 2>&1; then
             crossplane resource validate extensions.yaml composed/ --skip-success-results | tee validate.txt

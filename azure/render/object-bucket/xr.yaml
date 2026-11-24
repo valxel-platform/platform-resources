@@ -1,0 +1,22 @@
+# A ObjectBucket as OpenChoreo renders it into a cell namespace on an Azure data plane, tags as the SDLC tool writes them, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: r-field-photos-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  versioning: true
+  expire_days: 365
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - role:Storage Blob Data Contributor
+    - role:Storage Blob Data Reader
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small

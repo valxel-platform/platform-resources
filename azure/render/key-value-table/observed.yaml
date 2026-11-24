@@ -1,0 +1,16 @@
+# The composed resources as the provider reports them once Azure has finished: pass with --observed-resources to render a later reconcile, where the XR gets its outputs, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: cosmosdb.azure.m.upbound.io/v1beta1
+kind: SQLContainer
+metadata:
+  name: r-field-state-development-1a2b3c4d-items
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: container
+status:
+  atProvider:
+    id: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.DocumentDB/databaseAccounts/vx-field-state-developm-f5d2c7d3a3e9/sqlDatabases/data/containers/items
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-24T00:00:00Z'

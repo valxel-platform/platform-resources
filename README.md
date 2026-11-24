@@ -1,7 +1,7 @@
 # Platform resources: cloud services for Valxel products
 
 The cloud services products may use (constitution VX-19), as OpenChoreo ClusterResourceTypes backed
-by Crossplane Compositions, one per cloud: `aws/` on AWS, `gcp/` on Google Cloud. The list, and what
+by Crossplane Compositions, one per cloud: `aws/` on AWS, `gcp/` on Google Cloud, `azure/` on Azure. The list, and what
 each is for on each cloud, lives in the platform catalog (`valxel-platform/sdlc-governance`,
 `platform/catalog.yaml`); this repo builds each type in it. A data plane installs the ClusterResourceTypes,
 the XRDs and its own cloud's Compositions only, so each XRD has one Composition there.
@@ -226,3 +226,38 @@ installations only: on AWS the catalog makes postgres resources as OpenChoreo's
   `AlarmRouting`: on Google Cloud a webhook channel to the tool's `/api/signals/cloud-monitoring`
   with basic auth (password: the signals token). Put its `status.channel` in `valxel-gcp` as
   `alarmChannel`.
+
+## Azure
+
+On an Azure data plane (one subscription per product environment) install `azure/provider.yaml`
+(provider-upjet-azure v2.7.0, namespaced `*.azure.m.upbound.io`), a filled-in
+`azure/environment-config.yaml` (`valxel-azure`; platform-foundation's azure module outputs most
+of it), the ClusterResourceTypes and XRDs (`apis/postgres` too, as on Google Cloud), the
+Compositions in `azure/`, and for Kafka the ones in `strimzi/`. Valkey comes later.
+
+| Type | On Azure |
+|---|---|
+| `key-value-table` | A Cosmos DB for NoSQL account per resource: serverless (autoscale when large), continuous backup, keys off, private endpoint, the product's key |
+| `event-stream` | An Event Hubs Standard namespace and hub, a consumer group per reader, private endpoint |
+| `queue` | A Service Bus Standard queue with its dead-letter queue; sessions when `fifo` |
+| `object-bucket` | A storage account and container, shared keys off, private endpoint, the product's key |
+| `topic` | A Service Bus Standard topic |
+| `postgres` | A PostgreSQL flexible server on the delegated subnet, the product's key, HA by size, a delete lock |
+
+- **Identity.** `workload-identity` makes a managed identity per component, federated to its
+  Kubernetes service account on the cluster's OIDC issuer, and reports its client ID as the
+  `role` output (`AZURE_CLIENT_ID`; the service account carries it as
+  `azure.workload.identity/client-id`). Each resource's Composition finds the consumers'
+  identities by their labels and assigns the catalog's roles on that resource only (Azure RBAC,
+  or Cosmos DB's own data roles). The identity may need a reconcile or two to exist before a
+  resource's roles go on.
+- **Encryption.** Cosmos DB, Blob Storage and PostgreSQL use the product's Key Vault key through
+  the data plane's CMK identity. Event Hubs and Service Bus Standard use Microsoft-managed keys:
+  customer-managed keys need Premium.
+- **Alarms.** Azure Monitor metric alerts, sent to the data plane's `AlarmRouting`: on Azure an
+  action group whose webhook posts the common alert schema to the tool's
+  `/api/signals/azure-monitor`, with the subscription's signals token in the URL (read from the
+  `tokenSecretRef` Secret). Put its `status.channel` in `valxel-azure` as `alarmActionGroup`.
+- **Names.** Cosmos DB, Event Hubs and Service Bus namespaces, storage accounts and PostgreSQL
+  servers are globally unique: each is named with the prefix, part of the resource's name and a
+  hash of its namespace and name.
