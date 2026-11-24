@@ -27,7 +27,7 @@ data:
 apiVersion: managedidentity.azure.m.upbound.io/v1beta1
 kind: UserAssignedIdentity
 metadata:
-  name: r-agtech-field-api-identity-development-1a2b3c4d
+  name: agtech-field-api-identity-elsewhere
   namespace: dp-default-agtech-development-5f6e7d8c
   labels:
     valxel.dev/component: agtech-field-api
@@ -41,7 +41,7 @@ status:
 apiVersion: managedidentity.azure.m.upbound.io/v1beta1
 kind: UserAssignedIdentity
 metadata:
-  name: r-agtech-field-worker-identity-development-1a2b3c4d
+  name: agtech-field-worker-identity-elsewhere
   namespace: dp-default-agtech-development-5f6e7d8c
   labels:
     valxel.dev/component: agtech-field-worker
@@ -55,7 +55,7 @@ status:
 apiVersion: managedidentity.azure.m.upbound.io/v1beta1
 kind: UserAssignedIdentity
 metadata:
-  name: r-agtech-sensor-api-identity-development-1a2b3c4d
+  name: agtech-sensor-api-identity-elsewhere
   namespace: dp-default-agtech-development-5f6e7d8c
   labels:
     valxel.dev/component: agtech-sensor-api
