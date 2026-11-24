@@ -72,7 +72,7 @@ jobs:
       - name: Validate against the provider and XRD schemas
         run: |
           # One YAML stream: each file's documents, separated.
-          for f in aws/provider.yaml gcp/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
+          for f in aws/provider.yaml gcp/provider.yaml azure/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
           # Validate what the Compositions compose. The XRs are this module's own inputs; the
           # tests check them against the XRDs and the catalog.
           python3 - <<'PY'
@@ -94,6 +94,34 @@ jobs:
             echo "::error::composed objects without a schema (a provider missing from */provider.yaml, or a wrong API group)"
             exit 1
           fi
+      - name: Probe Azure schemas (temporary)
+        if: ${{ always() }}
+        run: |
+          find ~/.crossplane -name '*.yaml' -path '*provider-azure*' -print0 | xargs -0 python3 -c '
+          import sys, yaml
+          want = {"UserAssignedIdentity","FederatedIdentityCredential","RoleAssignment","Account","SQLDatabase","SQLContainer","SQLRoleAssignment","EventHubNamespace","EventHub","ConsumerGroup","ServiceBusNamespace","Queue","Topic","Container","FlexibleServer","FlexibleServerDatabase","FlexibleServerConfiguration","MonitorMetricAlert","MonitorActionGroup","ManagementLock","AuthorizationRule"}
+          seen=set()
+          for f in sys.argv[1:]:
+              for d in yaml.safe_load_all(open(f)):
+                  if not d or d.get("kind")!="CustomResourceDefinition": continue
+                  s=d["spec"]; k=s["names"]["kind"]
+                  if k not in want or ".m." not in s["group"] or (s["group"],k) in seen: continue
+                  seen.add((s["group"],k))
+                  for v in s["versions"]:
+                      if not v.get("served"): continue
+                      fp=v["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["forProvider"]["properties"]
+                      def show(props, pre="", depth=0):
+                          out=[]
+                          for n,sch in sorted(props.items()):
+                              typ=sch.get("type")
+                              if typ=="object" and "properties" in sch and depth<1:
+                                  out.append(pre+n+"{"+",".join(sorted(sch["properties"]))+"}")
+                              elif typ=="array" and sch.get("items",{}).get("properties") and depth<1:
+                                  out.append(pre+n+"[{"+",".join(sorted(sch["items"]["properties"]))+"}]")
+                              else: out.append(pre+n)
+                          return out
+                      print("SCHEMA", s["group"], v["name"], k, " ".join(show(fp)))
+          '
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
