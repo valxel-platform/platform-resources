@@ -32,7 +32,7 @@ spec:
       static: http://moto.crossplane-system.svc.cluster.local:5000
     # The Terraform side uses the endpoint only for the services listed here (Terraform's names);
     # the SDK side uses it for all of them. Add a service here when a Composition starts using it.
-    services: [cloudwatch, dynamodb, events, iam, kinesis, kms, s3, sns, sqs, sts]
+    services: [cloudwatch, dynamodb, events, iam, kinesis, kms, s3, s3control, sns, sqs, sts]
   s3_use_path_style: true
   skip_credentials_validation: true
   skip_metadata_api_check: true
