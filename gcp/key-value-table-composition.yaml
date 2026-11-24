@@ -113,12 +113,12 @@ spec:
               name: {{ printf "%s-ttl" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
               annotations:
                 {{ setResourceNameAnnotation "ttl" }}
+                crossplane.io/external-name: {{ . | quote }}
             spec:
               forProvider:
                 project: {{ $env.project | quote }}
                 database: {{ $db | quote }}
                 collection: items
-                field: {{ . | quote }}
                 ttlConfig: {}
             {{- end }}
             {{- range $xr.spec.consumers }}

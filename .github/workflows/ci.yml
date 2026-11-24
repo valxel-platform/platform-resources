@@ -84,25 +84,16 @@ jobs:
                   yaml.safe_dump_all(docs, f, sort_keys=False)
           PY
           # The CLI moved validate under `resource`; older ones have it under `beta`.
+          # A missing schema fails too, but for Cilium's policies (the data plane's CNI, no package).
           if crossplane resource validate --help >/dev/null 2>&1; then
-            crossplane resource validate extensions.yaml composed/ --skip-success-results --error-on-missing-schemas
+            crossplane resource validate extensions.yaml composed/ --skip-success-results | tee validate.txt
           else
-            crossplane beta validate extensions.yaml composed/ --skip-success-results --error-on-missing-schemas
+            crossplane beta validate extensions.yaml composed/ --skip-success-results | tee validate.txt
           fi
-      - name: Probe schemas (temporary)
-        if: ${{ always() }}
-        run: |
-          find ~/.crossplane -name '*.yaml' -path '*firestore*' -print0 | xargs -0 python3 -c '
-          import sys, yaml
-          for f in sys.argv[1:]:
-              for d in yaml.safe_load_all(open(f)):
-                  if d and d.get("kind")=="CustomResourceDefinition" and d["spec"]["group"]=="firestore.gcp.m.upbound.io" and d["spec"]["names"]["kind"]=="Field":
-                      v=d["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
-                      print("SCHEMA forProvider", sorted(v["properties"]["forProvider"]["properties"]))
-                      print("SCHEMA ttl", v["properties"]["forProvider"]["properties"].get("ttlConfig"))
-                      print("SCHEMA anno", d["metadata"].get("annotations"))
-          '
-          grep -rh "external-name" ~/.crossplane/cache/xpkg.crossplane.io/crossplane-contrib/provider-gcp-firestore@v3.1.0/ | head -5
+          if grep 'could not find CRD/XRD' validate.txt | grep -v 'Kind=CiliumNetworkPolicy'; then
+            echo "::error::composed objects without a schema (a provider missing from */provider.yaml, or a wrong API group)"
+            exit 1
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
