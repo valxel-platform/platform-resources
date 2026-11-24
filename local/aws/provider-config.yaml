@@ -37,4 +37,4 @@ spec:
   skip_credentials_validation: true
   skip_metadata_api_check: true
   skip_region_validation: true
-  skip_requesting_account_id: true
+  # The account ID is asked of moto (STS), so ARNs carry its account, 123456789012.
