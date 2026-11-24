@@ -1,0 +1,170 @@
+# The resources a feature would ask for, as OpenChoreo renders them (aws/render/*/xr.yaml), in one
+# namespace: the components' identities first, then what they use. check.sh waits for them and
+# checks moto has what they built.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: valxel-e2e
+---
+apiVersion: aws.platform.valxel.dev/v1alpha1
+kind: WorkloadIdentity
+metadata:
+  name: agtech-field-api
+  namespace: valxel-e2e
+spec:
+  component: agtech-field-api
+  service_account: ''
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
+---
+apiVersion: aws.platform.valxel.dev/v1alpha1
+kind: WorkloadIdentity
+metadata:
+  name: agtech-field-worker
+  namespace: valxel-e2e
+spec:
+  component: agtech-field-worker
+  service_account: ''
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
+---
+apiVersion: aws.platform.valxel.dev/v1alpha1
+kind: WorkloadIdentity
+metadata:
+  name: agtech-sensor-api
+  namespace: valxel-e2e
+spec:
+  component: agtech-sensor-api
+  service_account: ''
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
+---
+apiVersion: platform.valxel.dev/v1alpha1
+kind: KeyValueTable
+metadata:
+  name: r-field-state-development-1a2b3c4d
+  namespace: valxel-e2e
+spec:
+  partition_key: field_id
+  sort_key: reading_at
+  ttl_attribute: expires_at
+  indexes:
+  - by-farm:farm_id:reading_at
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - dynamodb:GetItem
+    - dynamodb:PutItem
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - dynamodb:Query
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
+---
+apiVersion: platform.valxel.dev/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: r-field-photos-development-1a2b3c4d
+  namespace: valxel-e2e
+spec:
+  versioning: true
+  expire_days: 365
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - s3:GetObject
+    - s3:ListBucket
+    - s3:PutObject
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
+---
+apiVersion: platform.valxel.dev/v1alpha1
+kind: Queue
+metadata:
+  name: r-jobs-development-1a2b3c4d
+  namespace: valxel-e2e
+spec:
+  fifo: true
+  visibility_timeout_s: 120
+  max_receives: 3
+  consumers:
+  - component: agtech-field-api
+    access:
+    - write
+    actions:
+    - sqs:SendMessage
+    - sqs:GetQueueAttributes
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:resource: jobs
+    valxel:data-class: general
+  size: small
+---
+apiVersion: platform.valxel.dev/v1alpha1
+kind: Topic
+metadata:
+  name: r-alerts-development-1a2b3c4d
+  namespace: valxel-e2e
+spec:
+  fifo: false
+  consumers:
+  - component: agtech-field-api
+    access:
+    - write
+    actions:
+    - sns:Publish
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
+---
+apiVersion: platform.valxel.dev/v1alpha1
+kind: EventStream
+metadata:
+  name: r-readings-development-1a2b3c4d
+  namespace: valxel-e2e
+spec:
+  retention_hours: 168
+  consumers:
+  - component: agtech-sensor-api
+    access:
+    - write
+    actions:
+    - kinesis:PutRecord
+    - kinesis:PutRecords
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - kinesis:GetRecords
+    - kinesis:GetShardIterator
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: medium

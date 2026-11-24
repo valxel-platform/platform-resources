@@ -1,0 +1,40 @@
+# The AWS providers on a laptop or in CI: every call goes to moto (a local AWS emulator) instead of
+# AWS, through the Service in moto-service.yaml. Moto takes any credentials; these are placeholders.
+# Never apply this to a cluster that reaches real AWS: aws/provider-config.yaml is that one.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-local-credentials
+  namespace: crossplane-system
+type: Opaque
+stringData:
+  credentials: |
+    [default]
+    aws_access_key_id = local
+    aws_secret_access_key = local
+---
+apiVersion: aws.m.upbound.io/v1beta1
+kind: ClusterProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: aws-local-credentials
+      key: credentials
+  endpoint:
+    source: Custom
+    hostnameImmutable: true
+    url:
+      type: Static
+      static: http://moto.crossplane-system.svc.cluster.local:5000
+    # The Terraform side uses the endpoint only for the services listed here (Terraform's names);
+    # the SDK side uses it for all of them. Add a service here when a Composition starts using it.
+    services: [cloudwatch, dynamodb, events, iam, kinesis, kms, s3, s3control, sns, sqs, sts]
+  s3_use_path_style: true
+  skip_credentials_validation: true
+  skip_metadata_api_check: true
+  skip_region_validation: true
+  # The account ID is asked of moto (STS), so ARNs carry its account, 123456789012.

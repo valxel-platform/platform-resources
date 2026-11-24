@@ -1,0 +1,73 @@
+# WorkloadIdentity on a laptop or in CI: the component's IAM role, as aws/workload-identity-composition.yaml
+# makes it, without the EKS Pod Identity association (moto has no EKS Pod Identity, and k3d isn't
+# EKS). The role has the same name, so each resource Composition attaches its policy to it as it
+# does in AWS. Pods reach moto with any credentials; the role is there for the policies to be checked.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: workload-identity-aws-local
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: WorkloadIdentity
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-aws
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+            {{- $role := printf "%s%s-%s" $env.namePrefix $xr.spec.component $nsHash | trunc 64 }}
+            {{- $roleArn := "" }}
+            {{- with getComposedResource . "role" }}{{- $roleArn = dig "status" "atProvider" "arn" "" . }}{{- end }}
+            {{- $trust := dict "Version" "2012-10-17" "Statement" (list (dict
+                "Effect" "Allow"
+                "Principal" (dict "AWS" (printf "arn:aws:iam::%s:root" $env.accountId))
+                "Action" "sts:AssumeRole")) }}
+            ---
+            apiVersion: iam.aws.m.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "role" }}
+                crossplane.io/external-name: {{ $role | quote }}
+            spec:
+              forProvider:
+                assumeRolePolicy: {{ $trust | toJson | quote }}
+                permissionsBoundary: {{ $env.permissionsBoundaryArn | quote }}
+                maxSessionDuration: 3600
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $roleArn }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: WorkloadIdentity
+            status:
+              roleArn: {{ $roleArn | quote }}
+              roleName: {{ $role | quote }}
+            {{- end }}
+    - step: ready
+      functionRef:
+        name: function-auto-ready
