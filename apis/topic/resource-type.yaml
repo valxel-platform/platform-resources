@@ -1,0 +1,78 @@
+# Written by scripts/neutral.py from apis/sns-topic/resource-type.yaml: change that file and run the script, not this one.
+# An Amazon SNS topic, as an OpenChoreo ClusterResourceType (constitution VX-19). Apply on the control plane.
+# The parameters are what a design's Resources line sets (the SDLC tool fills consumers and tags);
+# environmentConfigs.size is set per environment by the binding. It renders one SnsTopic into the
+# cell namespace; the data plane's Composition builds it in that environment's AWS account.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: topic
+  annotations:
+    openchoreo.dev/description: >-
+      An Amazon SNS topic, built by the Valxel platform's Crossplane Composition with encryption, private
+      access and least-privilege IAM.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      properties:
+        fifo:
+          type: boolean
+          description: Ordered, deduplicated delivery to FIFO queues. Never changes.
+          default: false
+        consumers:
+          type: array
+          description: >-
+            The components that use it and the access each is given (IAM actions on AWS, roles on Google Cloud) on it, from the
+            platform catalog's access (written by the SDLC tool from the approved design).
+          default: []
+          items:
+            type: object
+            required: [component, actions]
+            properties:
+              component:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+              access:
+                type: array
+                items: {type: string, enum: [read, write, delete]}
+              actions:
+                type: array
+                items: {type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+)$"}
+        tags:
+          type: object
+          description: Tags for the AWS resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Nothing stored that outlives it.
+  retainPolicy: Delete
+
+  outputs:
+    - name: topic
+      value: ${applied.instance.status.topic}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.topic)}"
+      template:
+        apiVersion: platform.valxel.dev/v1alpha1
+        kind: Topic
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          fifo: ${parameters.fifo}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

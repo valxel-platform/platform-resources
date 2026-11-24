@@ -1,0 +1,155 @@
+# Builds a KeyValueTable as a Firestore (native mode) database of its own (constitution VX-19,
+# catalog type key-value-table on Google Cloud).
+#
+#   Database          the database, CMEK with the product key, point-in-time recovery, delete
+#                     protection; items are documents in its collection `items`, id = partition key
+#                     (and sort key, joined by #), so the key fields are the document's own
+#   Index             one composite index per `indexes` entry, on `items`
+#   Field             the TTL policy on ttl_attribute, when set
+#   ProjectIAMMember  one per consumer and role, conditioned on this database only
+#
+# Never deleted with its binding: no Delete in managementPolicies.
+# Settings come from the data plane's valxel-gcp EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: key-value-table-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: KeyValueTable
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $labels := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.labels) }}
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 60 }}{{- $base = printf "%s-%s" ($base | trunc 51 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- /* Each consumer's Google service account, as its workload-identity names it. */}}
+            {{- $member := dict }}
+            {{- range (default (list) $xr.spec.consumers) }}
+            {{- $id := printf "%s%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24) }}
+            {{- $_ := set $member .component (printf "serviceAccount:%s@%s.iam.gserviceaccount.com" $id $env.project) }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $labels "valxel_product" | default "-" | upper) (index $labels "valxel_feature" | default "-" | upper)
+                  (index $labels "valxel_resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $db := $base | trunc 63 | trimSuffix "-" }}
+            {{- $dbPath := printf "projects/%s/databases/%s" $env.project $db }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "database" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $dbPath }}{{- end }}
+            ---
+            apiVersion: firestore.gcp.m.crossplane.io/v1beta1
+            kind: Database
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "database" }}
+                crossplane.io/external-name: {{ $db | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                locationId: {{ $env.firestoreLocation | quote }}
+                type: FIRESTORE_NATIVE
+                concurrencyMode: PESSIMISTIC
+                pointInTimeRecoveryEnablement: POINT_IN_TIME_RECOVERY_ENABLED
+                deleteProtectionState: DELETE_PROTECTION_ENABLED
+                cmekConfig:
+                  kmsKeyName: {{ $env.kmsKeyName | quote }}
+            {{- range (default (list) $xr.spec.indexes) }}
+            {{- if . }}
+            {{- $parts := splitList ":" . }}
+            ---
+            apiVersion: firestore.gcp.m.crossplane.io/v1beta1
+            kind: Index
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name (index $parts 0) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "index-%s" (index $parts 0)) }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                database: {{ $db | quote }}
+                collection: items
+                fields:
+                  {{- range (rest $parts) }}
+                  - fieldPath: {{ . | quote }}
+                    order: ASCENDING
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with $xr.spec.ttl_attribute }}
+            ---
+            apiVersion: firestore.gcp.m.crossplane.io/v1beta1
+            kind: Field
+            metadata:
+              name: {{ printf "%s-ttl" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "ttl" }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                database: {{ $db | quote }}
+                collection: items
+                field: {{ . | quote }}
+                ttlConfig: {}
+            {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- range (default (list) .actions) }}
+            ---
+            apiVersion: cloudplatform.gcp.m.crossplane.io/v1beta1
+            kind: ProjectIAMMember
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component (. | sha256sum | trunc 6)) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                role: {{ . | quote }}
+                member: {{ index $member $c.component | quote }}
+                condition:
+                  title: {{ printf "only %s" $db | quote }}
+                  expression: {{ printf "resource.name == \"%s\"" $dbPath | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: KeyValueTable
+            status:
+              table: {{ $db | quote }}
+              id: {{ $dbPath | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

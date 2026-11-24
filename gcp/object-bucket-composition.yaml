@@ -1,0 +1,127 @@
+# Builds an ObjectBucket as a Cloud Storage bucket (constitution VX-19, catalog type object-bucket
+# on Google Cloud): CMEK with the product key, public access prevented, uniform bucket-level access,
+# versioning, optional expiry, access logs when the data plane has a log bucket.
+#
+#   Bucket              the bucket, in the data plane's region
+#   BucketIAMMember     one per consumer and role, on this bucket only
+#
+# Never deleted with its binding: no Delete in managementPolicies.
+# Settings come from the data plane's valxel-gcp EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: object-bucket-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: ObjectBucket
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $labels := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.labels) }}
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 60 }}{{- $base = printf "%s-%s" ($base | trunc 51 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- /* Each consumer's Google service account, as its workload-identity names it. */}}
+            {{- $member := dict }}
+            {{- range (default (list) $xr.spec.consumers) }}
+            {{- $id := printf "%s%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24) }}
+            {{- $_ := set $member .component (printf "serviceAccount:%s@%s.iam.gserviceaccount.com" $id $env.project) }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $labels "valxel_product" | default "-" | upper) (index $labels "valxel_feature" | default "-" | upper)
+                  (index $labels "valxel_resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $name := $base | trunc 63 | trimSuffix "-" }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "bucket" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $name }}{{- end }}
+            ---
+            apiVersion: storage.gcp.m.crossplane.io/v1beta1
+            kind: Bucket
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "bucket" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                location: {{ $env.region | upper | quote }}
+                storageClass: STANDARD
+                uniformBucketLevelAccess: true
+                publicAccessPrevention: enforced
+                forceDestroy: false
+                versioning:
+                  enabled: {{ $xr.spec.versioning }}
+                encryption:
+                  defaultKmsKeyName: {{ $env.kmsKeyName | quote }}
+                {{- with $env.accessLogBucket }}
+                logging:
+                  logBucket: {{ . | quote }}
+                  logObjectPrefix: {{ printf "%s/" $name | quote }}
+                {{- end }}
+                {{- with $xr.spec.expire_days }}
+                lifecycleRule:
+                  - action:
+                      type: Delete
+                    condition:
+                      age: {{ . }}
+                {{- end }}
+                labels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- range (default (list) .actions) }}
+            ---
+            apiVersion: storage.gcp.m.crossplane.io/v1beta1
+            kind: BucketIAMMember
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component (. | sha256sum | trunc 6)) }}
+            spec:
+              forProvider:
+                bucket: {{ $name | quote }}
+                role: {{ . | quote }}
+                member: {{ index $member $c.component | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: ObjectBucket
+            status:
+              bucket: {{ $name | quote }}
+              id: {{ printf "gs://%s" $name | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

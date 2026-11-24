@@ -25,13 +25,14 @@ spec:
               properties:
                 endpoint:
                   type: string
-                  description: The SDLC tool's CloudWatch signal endpoint, https://<host>/api/signals/cloudwatch.
+                  description: The SDLC tool's signal endpoint, https://<host>/api/signals/cloudwatch (on Google Cloud the Composition sends to /api/signals/cloud-monitoring).
                   pattern: "^https://[^/]+/.*$"
                 tokenSecretRef:
                   type: object
                   description: >-
                     The Secret, in this namespace, whose key holds the Authorization header EventBridge
-                    sends: "Bearer " followed by the tool's VALXEL_SIGNALS_TOKEN.
+                    sends: "Bearer " followed by the tool's VALXEL_SIGNALS_TOKEN. On Google Cloud, the token alone
+                    (the webhook's basic-auth password).
                   required: [name, key]
                   properties:
                     name: {type: string}
@@ -49,3 +50,6 @@ spec:
                   type: string
                 ruleName:
                   type: string
+                channel:
+                  type: string
+                  description: On Google Cloud, the notification channel (alarmChannel in valxel-gcp).

@@ -1,0 +1,28 @@
+# This data plane's Google Cloud settings, read by every Composition in gcp/: one data plane per
+# product environment, each in its own project (constitution VX-19, product.yaml runtime.cloud).
+# Fill in when the platform team sets up the environment; the SDLC tool never changes this file.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-gcp
+data:
+  # The environment's project (id and number) and region.
+  project: <project-id>
+  projectNumber: "<project-number>"
+  region: <region>
+  # Firestore's location: the region, or a multi-region (nam5, eur3).
+  firestoreLocation: <region>
+  # The environment this data plane runs (as in product.yaml's pipeline); alerts carry it.
+  environment: <environment>
+  # Prepended to every Google Cloud resource name, so these never collide with resources made by hand.
+  namePrefix: vx-
+  # The product's Cloud KMS key in this project: every database, topic and bucket is encrypted with
+  # it (CMEK); each service's agent may use it, and nothing else.
+  kmsKeyName: projects/<project-id>/locations/<region>/keyRings/<ring>/cryptoKeys/<key>
+  # Optional: the AlarmRouting's notification channel (status.channel). Empty: no alerts.
+  alarmChannel: ""
+  # Optional: a bucket for Cloud Storage access logs. Empty: no access logs.
+  accessLogBucket: ""
+  # Labels on every resource, on top of the product, feature and data class labels each carries.
+  labels:
+    valxel_managed-by: crossplane

@@ -1,0 +1,17 @@
+# A filled-in valxel-gcp EnvironmentConfig for rendering the Compositions.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-gcp
+data:
+  project: agtech-development
+  projectNumber: "123456789012"
+  region: us-central1
+  firestoreLocation: us-central1
+  environment: development
+  namePrefix: vx-
+  kmsKeyName: projects/agtech-development/locations/us-central1/keyRings/valxel/cryptoKeys/product
+  alarmChannel: projects/agtech-development/notificationChannels/4411223344
+  accessLogBucket: vx-access-logs-agtech-development
+  labels:
+    valxel_managed-by: crossplane

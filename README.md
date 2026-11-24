@@ -1,8 +1,10 @@
-# Platform resources: AWS services for Valxel products
+# Platform resources: cloud services for Valxel products
 
-The AWS services products may use (constitution VX-19), as OpenChoreo ClusterResourceTypes backed
-by Crossplane Compositions. The list, and what each is for, lives in the platform catalog
-(`valxel-platform/sdlc-governance`, `platform/aws-resources.yaml`); this repo builds each type in it.
+The cloud services products may use (constitution VX-19), as OpenChoreo ClusterResourceTypes backed
+by Crossplane Compositions, one per cloud: `aws/` on AWS, `gcp/` on Google Cloud. The list, and what
+each is for on each cloud, lives in the platform catalog (`valxel-platform/sdlc-governance`,
+`platform/catalog.yaml`); this repo builds each type in it. A data plane installs the ClusterResourceTypes,
+the XRDs and its own cloud's Compositions only, so each XRD has one Composition there.
 PostgreSQL and Valkey come from OpenChoreo's own
 [`provisioner-crossplane`](https://github.com/openchoreo/community-modules/tree/main/provisioner-crossplane)
 module, which this one follows in layout and conventions.
@@ -13,6 +15,11 @@ service and binds it to each environment. This repo is what turns those Resource
 
 | Type | Builds | Kept when unbound |
 | --- | --- | --- |
+| `key-value-table` | DynamoDB table (AWS); a Firestore database of its own, native mode, point-in-time recovery, delete protection (Google Cloud) | yes |
+| `event-stream` | Kinesis stream (AWS); a Pub/Sub topic keeping `retention_hours`, with a replayable subscription per reader (Google Cloud) | yes |
+| `queue` | SQS queue and dead-letter queue (AWS); a Pub/Sub topic to send to, one subscription to receive from and a dead-letter topic (Google Cloud) | no |
+| `object-bucket` | S3 bucket (AWS); Cloud Storage bucket, public access prevented, uniform access (Google Cloud) | yes |
+| `topic` | SNS topic (AWS); Pub/Sub topic (Google Cloud) | no |
 | `dynamodb-table` | DynamoDB table: on-demand (small, medium) or provisioned (large), point-in-time recovery, deletion protection | yes |
 | `kinesis-stream` | Kinesis stream: one shard (small) or on-demand | yes |
 | `sqs-queue` | SQS queue plus a dead-letter queue, with an alarm when the data plane has an alarm topic | no |
@@ -21,6 +28,11 @@ service and binds it to each environment. This repo is what turns those Resource
 | `kafka-topic` | A Kafka topic for one data contract, never picked by hand: replication 3, compacted or kept `retention_days`, a dead-letter topic; access only for the contract's owner (write) and consumers (read, their own consumer groups). MSK with IAM in production (`aws/`), Strimzi with ACLs elsewhere (`strimzi/`), both through provider-kafka | yes |
 | `kafka-user` | One component's Kafka identity: nothing on MSK (IAM through its workload identity), a SCRAM user on Strimzi whose password is a Secret in its own namespace | no |
 | `workload-identity` | One component's IAM role, trusted only through EKS Pod Identity for its ServiceAccount, under the permissions boundary | no |
+
+The version 1 AWS types below the neutral ones (`dynamodb-table`...`sns-topic`) are aliases kept for the
+resources made under them, which never change type: `scripts/neutral.py` writes the neutral types' AWS
+side (`apis/<type>/`, `aws/<type>-composition.yaml`, its render fixtures) from them, and the tests
+fail when the two drift. Change the version 1 type and run the script.
 
 Every AWS type is encrypted with the product's KMS key and tagged with product, feature and data class,
 and comes with the catalog's standard CloudWatch alarms (see [Alarms](#alarms)).
@@ -184,3 +196,25 @@ outputs, and stored data is kept when its binding goes.
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Google Cloud
+
+On a Google Cloud data plane (one project per product environment) install `gcp/provider.yaml`, a
+filled-in `gcp/environment-config.yaml` (`valxel-gcp`), the ClusterResourceTypes and XRDs, the
+Compositions in `gcp/`, and for Kafka the ones in `strimzi/` (Strimzi on GKE in every environment
+for now; Managed Service for Apache Kafka later). PostgreSQL (Cloud SQL) and Valkey (Memorystore)
+come later, with their Compositions.
+
+- **Identity.** `workload-identity` makes a Google service account per component that only the
+  component's Kubernetes service account may act as (GKE Workload Identity), and reports its email
+  as the `role` output; the Kubernetes service account carries it as
+  `iam.gke.io/gcp-service-account`. The account has no roles of its own: each resource's
+  Composition grants it the catalog's roles on that resource only (a Firestore grant is conditioned
+  on its database).
+- **Encryption and labels.** Everything is encrypted with the product's Cloud KMS key
+  (`kmsKeyName`), kept in the data plane's region, and labelled as the SDLC tool writes them
+  (`valxel_product`, `valxel_feature`, `valxel_data-class`, lowercase).
+- **Alarms.** The catalog's alarms are Cloud Monitoring alert policies sent to the data plane's
+  `AlarmRouting`: on Google Cloud a webhook channel to the tool's `/api/signals/cloud-monitoring`
+  with basic auth (password: the signals token). Put its `status.channel` in `valxel-gcp` as
+  `alarmChannel`.

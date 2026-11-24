@@ -1,0 +1,16 @@
+# The channel as the provider reports it once made, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: monitoring.gcp.m.crossplane.io/v1beta1
+kind: NotificationChannel
+metadata:
+  name: sdlc-tool
+  namespace: crossplane-system
+  annotations:
+    crossplane.io/composition-resource-name: channel
+status:
+  atProvider:
+    name: projects/agtech-development/notificationChannels/4411223344
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

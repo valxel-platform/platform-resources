@@ -1,0 +1,78 @@
+# Builds an AlarmRouting on Google Cloud: a Cloud Monitoring webhook notification channel that
+# sends every alert policy the gcp/ Compositions make to the SDLC tool's Cloud Monitoring signal
+# endpoint (https://<host>/api/signals/cloud-monitoring), signing in with basic auth: user
+# `valxel`, password the tool's VALXEL_SIGNALS_TOKEN (on Google Cloud the tokenSecretRef key holds
+# the token alone, not an Authorization header). One per data plane; its status.channel goes in the
+# valxel-gcp EnvironmentConfig as alarmChannel.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: alarm-routing-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: AlarmRouting
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $display := printf "%svalxel-sdlc" $env.namePrefix }}
+            {{- $channel := "" }}
+            {{- with getComposedResource . "channel" }}{{- $channel = dig "status" "atProvider" "name" "" . }}{{- end }}
+            ---
+            apiVersion: monitoring.gcp.m.crossplane.io/v1beta1
+            kind: NotificationChannel
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "channel" }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                displayName: {{ $display | quote }}
+                type: webhook_basicauth
+                enabled: true
+                labels:
+                  url: {{ regexReplaceAll "/signals/[a-z-]+$" $xr.spec.endpoint "/signals/cloud-monitoring" | quote }}
+                  username: valxel
+                sensitiveLabels:
+                  passwordSecretRef:
+                    name: {{ $xr.spec.tokenSecretRef.name | quote }}
+                    key: {{ $xr.spec.tokenSecretRef.key | quote }}
+                userLabels:
+                  {{- range $k, $v := (default (dict) $env.labels) }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- if $channel }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: AlarmRouting
+            status:
+              channel: {{ $channel | quote }}
+              ruleName: {{ $display | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

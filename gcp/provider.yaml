@@ -1,0 +1,63 @@
+# The Crossplane Google Cloud providers this module uses (crossplane-contrib/provider-upjet-gcp, v2:
+# namespaced managed resources under gcp.m.crossplane.io), each authenticating with GKE Workload
+# Identity: its ServiceAccount (crossplane-system/<provider name>) is bound to a Google service
+# account allowed to manage its service in this project. Create the bindings before the providers.
+# provider-gcp-cloudplatform's account may create service accounts and grant roles only on this
+# project, and only the roles the catalog names (an IAM deny policy or organization policy, set up
+# with the data plane in platform-foundation).
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-gcp
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-gcp
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-gcp-pubsub
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-pubsub:v2.6.1
+  runtimeConfigRef:
+    name: provider-gcp
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-gcp-storage
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-storage:v2.6.1
+  runtimeConfigRef:
+    name: provider-gcp
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-gcp-firestore
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-firestore:v2.6.1
+  runtimeConfigRef:
+    name: provider-gcp
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-gcp-cloudplatform
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-cloudplatform:v2.6.1
+  runtimeConfigRef:
+    name: provider-gcp
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-gcp-monitoring
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-monitoring:v2.6.1
+  runtimeConfigRef:
+    name: provider-gcp
+---
+# The Kafka types use provider-kafka against the environment's Strimzi cluster (strimzi/), as
+# outside production on AWS; strimzi/provider.yaml installs it.
