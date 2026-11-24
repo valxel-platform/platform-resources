@@ -1,5 +1,5 @@
 # The Crossplane Google Cloud providers this module uses (crossplane-contrib/provider-upjet-gcp v3 (Firestore since v3.0):
-# namespaced managed resources under gcp.m.crossplane.io), each authenticating with GKE Workload
+# namespaced managed resources under *.gcp.m.upbound.io), each authenticating with GKE Workload
 # Identity: its ServiceAccount (crossplane-system/<provider name>) is bound to a Google service
 # account allowed to manage its service in this project. Create the bindings before the providers.
 # provider-gcp-cloudplatform's account may create service accounts and grant roles only on this

@@ -50,7 +50,7 @@ spec:
             {{- $ready := false }}
             {{- with getComposedResource . "service-account" }}{{- $ready = eq (dig "status" "atProvider" "email" "" .) $email }}{{- end }}
             ---
-            apiVersion: cloudplatform.gcp.m.crossplane.io/v1beta1
+            apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
             kind: ServiceAccount
             metadata:
               name: {{ $xr.metadata.name }}
@@ -63,7 +63,7 @@ spec:
                 displayName: {{ printf "%s (%s)" $xr.spec.component $xr.metadata.namespace | trunc 100 | quote }}
                 description: {{ printf "valxel workload identity: %s/%s" $xr.metadata.namespace $ksa | quote }}
             ---
-            apiVersion: cloudplatform.gcp.m.crossplane.io/v1beta1
+            apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
             kind: ServiceAccountIAMMember
             metadata:
               name: {{ printf "%s-wi" $xr.metadata.name | trunc 63 | trimSuffix "-" }}

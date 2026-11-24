@@ -67,7 +67,7 @@ spec:
             {{- $ready := false }}
             {{- with getComposedResource . "subscription" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $subPath }}{{- end }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Topic
             metadata:
               name: {{ printf "%s-dlq" $xr.metadata.name }}
@@ -85,7 +85,7 @@ spec:
                   {{ $k | quote }}: {{ $v | toString | quote }}
                   {{- end }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Subscription
             metadata:
               name: {{ printf "%s-dlq" $xr.metadata.name }}
@@ -100,7 +100,7 @@ spec:
                 expirationPolicy:
                   ttl: ""
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: TopicIAMMember
             metadata:
               name: {{ printf "%s-dlq-agent" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
@@ -113,7 +113,7 @@ spec:
                 role: roles/pubsub.publisher
                 member: {{ $agent | quote }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Topic
             metadata:
               name: {{ $xr.metadata.name }}
@@ -131,7 +131,7 @@ spec:
                   {{ $k | quote }}: {{ $v | toString | quote }}
                   {{- end }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Subscription
             metadata:
               name: {{ $xr.metadata.name }}
@@ -157,7 +157,7 @@ spec:
                   {{ $k | quote }}: {{ $v | toString | quote }}
                   {{- end }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: SubscriptionIAMMember
             metadata:
               name: {{ printf "%s-agent" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
@@ -174,7 +174,7 @@ spec:
             {{- $reads := has "read" (default (list) .access) }}
             {{- range (default (list) .actions) }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: {{ ternary "SubscriptionIAMMember" "TopicIAMMember" $reads }}
             metadata:
               name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
@@ -205,7 +205,7 @@ spec:
             {{- if $env.alarmChannel }}
             {{- range $alarms }}
             ---
-            apiVersion: monitoring.gcp.m.crossplane.io/v1beta1
+            apiVersion: monitoring.gcp.m.upbound.io/v1beta1
             kind: AlertPolicy
             metadata:
               name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}

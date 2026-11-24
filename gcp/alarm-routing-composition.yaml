@@ -41,7 +41,7 @@ spec:
             {{- $channel := "" }}
             {{- with getComposedResource . "channel" }}{{- $channel = dig "status" "atProvider" "name" "" . }}{{- end }}
             ---
-            apiVersion: monitoring.gcp.m.crossplane.io/v1beta1
+            apiVersion: monitoring.gcp.m.upbound.io/v1beta1
             kind: NotificationChannel
             metadata:
               name: {{ $xr.metadata.name }}

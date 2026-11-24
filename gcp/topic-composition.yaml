@@ -58,7 +58,7 @@ spec:
             {{- $ready := false }}
             {{- with getComposedResource . "topic" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $topicPath }}{{- end }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Topic
             metadata:
               name: {{ $xr.metadata.name }}
@@ -79,7 +79,7 @@ spec:
             {{- $c := . }}
             {{- range (default (list) .actions) }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: TopicIAMMember
             metadata:
               name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}

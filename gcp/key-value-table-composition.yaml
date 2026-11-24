@@ -64,7 +64,7 @@ spec:
             {{- $ready := false }}
             {{- with getComposedResource . "database" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $dbPath }}{{- end }}
             ---
-            apiVersion: firestore.gcp.m.crossplane.io/v1beta1
+            apiVersion: firestore.gcp.m.upbound.io/v1beta1
             kind: Database
             metadata:
               name: {{ $xr.metadata.name }}
@@ -86,7 +86,7 @@ spec:
             {{- if . }}
             {{- $parts := splitList ":" . }}
             ---
-            apiVersion: firestore.gcp.m.crossplane.io/v1beta1
+            apiVersion: firestore.gcp.m.upbound.io/v1beta1
             kind: Index
             metadata:
               name: {{ printf "%s-%s" $xr.metadata.name (index $parts 0) | trunc 63 | trimSuffix "-" }}
@@ -107,7 +107,7 @@ spec:
             {{- end }}
             {{- with $xr.spec.ttl_attribute }}
             ---
-            apiVersion: firestore.gcp.m.crossplane.io/v1beta1
+            apiVersion: firestore.gcp.m.upbound.io/v1beta1
             kind: Field
             metadata:
               name: {{ printf "%s-ttl" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
@@ -125,7 +125,7 @@ spec:
             {{- $c := . }}
             {{- range (default (list) .actions) }}
             ---
-            apiVersion: cloudplatform.gcp.m.crossplane.io/v1beta1
+            apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
             kind: ProjectIAMMember
             metadata:
               name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}

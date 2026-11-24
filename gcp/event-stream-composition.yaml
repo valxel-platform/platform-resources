@@ -64,7 +64,7 @@ spec:
             {{- with getComposedResource . "topic" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $topicPath }}{{- end }}
             {{- $retention := printf "%ds" (mul (default 24 $xr.spec.retention_hours) 3600) }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Topic
             metadata:
               name: {{ $xr.metadata.name }}
@@ -87,7 +87,7 @@ spec:
             {{- $c := . }}
             {{- if has "read" (default (list) .access) }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: Subscription
             metadata:
               name: {{ printf "%s-%s" $xr.metadata.name $c.component | trunc 63 | trimSuffix "-" }}
@@ -111,7 +111,7 @@ spec:
                   {{- end }}
             {{- range (default (list) $c.actions) }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: SubscriptionIAMMember
             metadata:
               name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
@@ -127,7 +127,7 @@ spec:
             {{- else }}
             {{- range (default (list) $c.actions) }}
             ---
-            apiVersion: pubsub.gcp.m.crossplane.io/v1beta1
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
             kind: TopicIAMMember
             metadata:
               name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
@@ -151,7 +151,7 @@ spec:
             {{- if $env.alarmChannel }}
             {{- range $alarms }}
             ---
-            apiVersion: monitoring.gcp.m.crossplane.io/v1beta1
+            apiVersion: monitoring.gcp.m.upbound.io/v1beta1
             kind: AlertPolicy
             metadata:
               name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}

@@ -1,5 +1,5 @@
 # The channel as the provider reports it once made, for `crossplane composition render` (see README, Checking a Composition).
-apiVersion: monitoring.gcp.m.crossplane.io/v1beta1
+apiVersion: monitoring.gcp.m.upbound.io/v1beta1
 kind: NotificationChannel
 metadata:
   name: sdlc-tool

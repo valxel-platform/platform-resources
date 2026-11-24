@@ -85,25 +85,10 @@ jobs:
           PY
           # The CLI moved validate under `resource`; older ones have it under `beta`.
           if crossplane resource validate --help >/dev/null 2>&1; then
-            crossplane resource validate extensions.yaml composed/ --skip-success-results
+            crossplane resource validate extensions.yaml composed/ --skip-success-results --error-on-missing-schemas
           else
-            crossplane beta validate extensions.yaml composed/ --skip-success-results
+            crossplane beta validate extensions.yaml composed/ --skip-success-results --error-on-missing-schemas
           fi
-      - name: Probe schemas (temporary)
-        if: ${{ always() }}
-        run: |
-          find ~/.crossplane -name '*.yaml' -path '*gcp*' | head -3
-          find ~/.crossplane -name '*.yaml' -path '*gcp*' -print0 | xargs -0 python3 -c '
-          import sys, yaml
-          seen=set()
-          for f in sys.argv[1:]:
-              for d in yaml.safe_load_all(open(f)):
-                  if d and d.get("kind")=="CustomResourceDefinition":
-                      s=d["spec"]; k=s["names"]["kind"]
-                      if k in ("Topic","Subscription","TopicIAMMember","SubscriptionIAMMember","Database","Index","Field","Bucket","BucketIAMMember","ProjectIAMMember","ServiceAccount","ServiceAccountIAMMember","AlertPolicy","NotificationChannel"):
-                          seen.add((s["group"], k, ",".join(v["name"] for v in s["versions"] if v.get("served"))))
-          for x in sorted(seen): print("SCHEMA", *x)
-          '
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
