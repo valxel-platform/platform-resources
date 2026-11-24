@@ -19,6 +19,9 @@ data:
   # The product's Cloud KMS key in this project: every database, topic and bucket is encrypted with
   # it (CMEK); each service's agent may use it, and nothing else.
   kmsKeyName: projects/<project-id>/locations/<region>/keyRings/<ring>/cryptoKeys/<key>
+  # The data plane's VPC network, with private services access (platform-foundation's gcp module:
+  # output `network`). Cloud SQL instances get a private IP on it, and nothing else.
+  network: projects/<project-id>/global/networks/<network>
   # Optional: the AlarmRouting's notification channel (status.channel). Empty: no alerts.
   alarmChannel: ""
   # Optional: a bucket for Cloud Storage access logs. Empty: no access logs.

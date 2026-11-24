@@ -15,6 +15,7 @@ service and binds it to each environment. This repo is what turns those Resource
 
 | Type | Builds | Kept when unbound |
 | --- | --- | --- |
+| `postgres` | OpenChoreo's `postgres-crossplane` (RDS) on AWS, not built here; a Cloud SQL for PostgreSQL instance of its own, private IP only, HA by size (Google Cloud) | yes |
 | `key-value-table` | DynamoDB table (AWS); a Firestore database of its own, native mode, point-in-time recovery, delete protection (Google Cloud) | yes |
 | `event-stream` | Kinesis stream (AWS); a Pub/Sub topic keeping `retention_hours`, with a replayable subscription per reader (Google Cloud) | yes |
 | `queue` | SQS queue and dead-letter queue (AWS); a Pub/Sub topic to send to, one subscription to receive from and a dead-letter topic (Google Cloud) | no |
@@ -202,8 +203,9 @@ MIT, see [LICENSE](LICENSE).
 On a Google Cloud data plane (one project per product environment) install `gcp/provider.yaml`, a
 filled-in `gcp/environment-config.yaml` (`valxel-gcp`), the ClusterResourceTypes and XRDs, the
 Compositions in `gcp/`, and for Kafka the ones in `strimzi/` (Strimzi on GKE in every environment
-for now; Managed Service for Apache Kafka later). PostgreSQL (Cloud SQL) and Valkey (Memorystore)
-come later, with their Compositions.
+for now; Managed Service for Apache Kafka later). `apis/postgres` is for Google Cloud
+installations only: on AWS the catalog makes postgres resources as OpenChoreo's
+`postgres-crossplane`. Valkey (Memorystore) comes later.
 
 - **Identity.** `workload-identity` makes a Google service account per component that only the
   component's Kubernetes service account may act as (GKE Workload Identity), and reports its email
@@ -214,6 +216,12 @@ come later, with their Compositions.
 - **Encryption and labels.** Everything is encrypted with the product's Cloud KMS key
   (`kmsKeyName`), kept in the data plane's region, and labelled as the SDLC tool writes them
   (`valxel_product`, `valxel_feature`, `valxel_data-class`, lowercase).
+- **PostgreSQL.** Each `postgres` resource is a Cloud SQL instance of its own on a private IP
+  in the data plane's network (`network` in `valxel-gcp`, which needs private services access:
+  platform-foundation's gcp module sets it up and outputs the network). Components get `host`,
+  `port`, `database` and `username` as values and `password` by reference to the Secret
+  `<resource>-postgres` in their namespace; the password is made once and never appears in a
+  status. There is no `paused` size: Cloud SQL doesn't stop itself when idle.
 - **Alarms.** The catalog's alarms are Cloud Monitoring alert policies sent to the data plane's
   `AlarmRouting`: on Google Cloud a webhook channel to the tool's `/api/signals/cloud-monitoring`
   with basic auth (password: the signals token). Put its `status.channel` in `valxel-gcp` as

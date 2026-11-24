@@ -1,0 +1,223 @@
+# Builds a PostgresDatabase as a Cloud SQL for PostgreSQL instance of its own (constitution VX-19,
+# catalog type postgres on Google Cloud; on AWS the type is OpenChoreo's postgres-crossplane).
+#
+#   Secret              <name>-postgres in the cell namespace: the user's password, made once
+#                       (random) and kept; never in the resource's status or the instance's spec
+#   DatabaseInstance    Enterprise edition, private IP only on the data plane's network (which has
+#                       private services access), TLS required, CMEK with the product key,
+#                       backups with point-in-time recovery, deletion protection, max_connections
+#                       and HA by size; Query Insights on
+#   Database            the design's database
+#   User                `app`, with the Secret's password
+#   AlertPolicy         the catalog's alarms: CPU high, disk nearly full
+#
+# Sizes (the catalog's, for the capacity plan): small db-g1-small, 50 connections; medium
+# db-custom-2-8192, 400; medium-ha the same, regional; large db-custom-4-16384, regional, 800.
+# Never deleted with its binding: no Delete in managementPolicies.
+# Settings come from the data plane's valxel-gcp EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: postgres-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: PostgresDatabase
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $labels := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.labels) }}
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 60 }}{{- $base = printf "%s-%s" ($base | trunc 51 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- /* Each consumer's Google service account, as its workload-identity names it. */}}
+            {{- $member := dict }}
+            {{- range (default (list) $xr.spec.consumers) }}
+            {{- $id := printf "%s%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24) }}
+            {{- $_ := set $member .component (printf "serviceAccount:%s@%s.iam.gserviceaccount.com" $id $env.project) }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $labels "valxel_product" | default "-" | upper) (index $labels "valxel_feature" | default "-" | upper)
+                  (index $labels "valxel_resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $name := $base | trunc 63 | trimSuffix "-" }}
+            {{- $sizes := dict
+                  "small" (dict "tier" "db-g1-small" "ha" false "connections" "50")
+                  "medium" (dict "tier" "db-custom-2-8192" "ha" false "connections" "400")
+                  "medium-ha" (dict "tier" "db-custom-2-8192" "ha" true "connections" "400")
+                  "large" (dict "tier" "db-custom-4-16384" "ha" true "connections" "800") }}
+            {{- $size := index $sizes (default "small" $xr.spec.size) }}
+            {{- $secret := printf "%s-postgres" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+            {{- /* The password is made once: later reconciles keep what the Secret holds. */}}
+            {{- $password := randAlphaNum 32 | b64enc }}
+            {{- with getComposedResource . "password" }}{{- $password = dig "data" "password" $password . }}{{- end }}
+            {{- $host := "" }}
+            {{- with getComposedResource . "instance" }}{{- $host = dig "status" "atProvider" "privateIpAddress" "" . }}{{- end }}
+            {{- $dbReady := false }}
+            {{- with getComposedResource . "database" }}{{- $dbReady = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
+            {{- $userReady := false }}
+            {{- with getComposedResource . "user" }}{{- $userReady = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: {{ $secret }}
+              annotations:
+                {{ setResourceNameAnnotation "password" }}
+            type: Opaque
+            data:
+              password: {{ $password }}
+            ---
+            apiVersion: sql.gcp.m.upbound.io/v1beta1
+            kind: DatabaseInstance
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "instance" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                region: {{ $env.region | quote }}
+                databaseVersion: {{ printf "POSTGRES_%s" (default "17" $xr.spec.version | toString) | quote }}
+                encryptionKeyName: {{ $env.kmsKeyName | quote }}
+                deletionProtection: true
+                settings:
+                  tier: {{ $size.tier | quote }}
+                  edition: ENTERPRISE
+                  availabilityType: {{ ternary "REGIONAL" "ZONAL" $size.ha }}
+                  diskType: PD_SSD
+                  diskSize: 20
+                  diskAutoresize: true
+                  deletionProtectionEnabled: true
+                  ipConfiguration:
+                    ipv4Enabled: false
+                    privateNetwork: {{ $env.network | quote }}
+                    sslMode: ENCRYPTED_ONLY
+                  backupConfiguration:
+                    enabled: true
+                    pointInTimeRecoveryEnabled: true
+                    startTime: "03:00"
+                    backupRetentionSettings:
+                      retainedBackups: 14
+                  insightsConfig:
+                    queryInsightsEnabled: true
+                  databaseFlags:
+                    - name: max_connections
+                      value: {{ $size.connections | quote }}
+                  userLabels:
+                    {{- range $k, $v := $labels }}
+                    {{ $k | quote }}: {{ $v | toString | quote }}
+                    {{- end }}
+            ---
+            apiVersion: sql.gcp.m.upbound.io/v1beta1
+            kind: Database
+            metadata:
+              name: {{ printf "%s-db" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "database" }}
+                crossplane.io/external-name: {{ $xr.spec.database | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                instance: {{ $name | quote }}
+            ---
+            apiVersion: sql.gcp.m.upbound.io/v1beta1
+            kind: User
+            metadata:
+              name: {{ printf "%s-app" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "user" }}
+                crossplane.io/external-name: app
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                instance: {{ $name | quote }}
+                passwordSecretRef:
+                  name: {{ $secret | quote }}
+                  key: password
+            {{- /* The catalog's standard alarms for postgres on Google Cloud (sdlc-governance platform/catalog.yaml). */}}
+            {{- $filter := printf "resource.type=\"cloudsql_database\" AND resource.labels.database_id=\"%s:%s\"" $env.project $name }}
+            {{- $alarms := list
+                  (dict "name" "cpu-high" "metric" "cloudsql.googleapis.com/database/cpu/utilization"
+                        "filter" $filter "aligner" "ALIGN_MEAN" "period" 300 "periods" 3 "above" "0.8" "severity" "sev3"
+                        "says" "CPU has been over 80% for 15 minutes: queries are slowing; look for a missing index, or a bigger size.")
+                  (dict "name" "disk-high" "metric" "cloudsql.googleapis.com/database/disk/utilization"
+                        "filter" $filter "aligner" "ALIGN_MAX" "period" 300 "periods" 1 "above" "0.85" "severity" "sev2"
+                        "says" "The disk is over 85% full; it grows by itself, but a fast climb means runaway writes.") }}
+            {{- if $env.alarmChannel }}
+            {{- range $alarms }}
+            ---
+            apiVersion: monitoring.gcp.m.upbound.io/v1beta1
+            kind: AlertPolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                displayName: {{ printf "%s-%s" $base .name | quote }}
+                combiner: OR
+                severity: {{ ternary "ERROR" "WARNING" (eq .severity "sev2") }}
+                conditions:
+                  - displayName: {{ .name | quote }}
+                    conditionThreshold:
+                      filter: {{ printf "metric.type=\"%s\" AND %s" .metric .filter | quote }}
+                      comparison: COMPARISON_GT
+                      thresholdValue: {{ .above }}
+                      duration: {{ printf "%ds" (mul .period .periods) | quote }}
+                      aggregations:
+                        - alignmentPeriod: {{ printf "%ds" .period | quote }}
+                          perSeriesAligner: {{ .aligner }}
+                documentation:
+                  content: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                  mimeType: text/markdown
+                notificationChannels: [{{ $env.alarmChannel | quote }}]
+                userLabels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if and $host $dbReady $userReady }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: PostgresDatabase
+            status:
+              host: {{ $host | quote }}
+              port: "5432"
+              database: {{ $xr.spec.database | quote }}
+              username: app
+              secret: {{ $secret | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready
