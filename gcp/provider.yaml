@@ -1,4 +1,4 @@
-# The Crossplane Google Cloud providers this module uses (crossplane-contrib/provider-upjet-gcp, v2:
+# The Crossplane Google Cloud providers this module uses (crossplane-contrib/provider-upjet-gcp v3 (Firestore since v3.0):
 # namespaced managed resources under gcp.m.crossplane.io), each authenticating with GKE Workload
 # Identity: its ServiceAccount (crossplane-system/<provider name>) is bound to a Google service
 # account allowed to manage its service in this project. Create the bindings before the providers.
@@ -19,7 +19,7 @@ kind: Provider
 metadata:
   name: provider-gcp-pubsub
 spec:
-  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-pubsub:v2.6.0
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-pubsub:v3.1.0
   runtimeConfigRef:
     name: provider-gcp
 ---
@@ -28,7 +28,7 @@ kind: Provider
 metadata:
   name: provider-gcp-storage
 spec:
-  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-storage:v2.6.0
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-storage:v3.1.0
   runtimeConfigRef:
     name: provider-gcp
 ---
@@ -37,7 +37,7 @@ kind: Provider
 metadata:
   name: provider-gcp-firestore
 spec:
-  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-firestore:v2.6.0
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-firestore:v3.1.0
   runtimeConfigRef:
     name: provider-gcp
 ---
@@ -46,7 +46,7 @@ kind: Provider
 metadata:
   name: provider-gcp-cloudplatform
 spec:
-  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-cloudplatform:v2.6.0
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-cloudplatform:v3.1.0
   runtimeConfigRef:
     name: provider-gcp
 ---
@@ -55,7 +55,7 @@ kind: Provider
 metadata:
   name: provider-gcp-monitoring
 spec:
-  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-monitoring:v2.6.0
+  package: xpkg.crossplane.io/crossplane-contrib/provider-gcp-monitoring:v3.1.0
   runtimeConfigRef:
     name: provider-gcp
 ---

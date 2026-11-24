@@ -31,13 +31,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Probe packages (temporary)
-        run: |
-          for n in provider-gcp-firestore provider-gcp-firebase provider-gcp-firebaserules provider-gcp-datastore provider-gcp-pubsub; do
-            for v in v2.6.0 v3.1.0; do
-              if docker manifest inspect xpkg.crossplane.io/crossplane-contrib/$n:$v >/dev/null 2>&1; then echo "PROBE yes $n:$v"; else echo "PROBE no $n:$v"; fi
-            done
-          done
       - name: Check the module against the catalog
         run: |
           pip install --quiet "pytest==9.2.0" "pyyaml==6.0.3" "jsonschema==4.26.0"
