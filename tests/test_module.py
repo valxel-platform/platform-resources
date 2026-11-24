@@ -20,8 +20,6 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-# Provided by OpenChoreo's provisioner-crossplane module, not here.
-OPENCHOREO_TYPES = {"postgres", "cache"}
 KAFKA = ("kafka-topic", "kafka-user")
 
 
@@ -37,9 +35,21 @@ def load_catalog() -> dict:
 
 CATALOG = load_catalog()
 assert CATALOG.get("version") == 2, "this module reads version 2 of the catalog (platform/catalog.yaml)"
-TYPES = sorted(t for t in CATALOG["types"] if t not in OPENCHOREO_TYPES)
-ON = [(k, c) for k in TYPES for c in sorted(CATALOG["types"][k]["clouds"])]
-ALIASES = sorted((a, k) for k in TYPES for a in CATALOG["types"][k].get("aliases") or [])
+
+
+
+def built_here(kind: str, cloud: str) -> bool:
+    """A cloud's block naming another module's ClusterResourceType (`resource_type`, OpenChoreo's
+    postgres-crossplane on AWS) isn't built here."""
+    return CATALOG["types"][kind]["clouds"][cloud].get("resource_type", kind) == kind
+
+
+ON = [(k, c) for k in sorted(CATALOG["types"]) for c in sorted(CATALOG["types"][k]["clouds"]) if built_here(k, c)]
+TYPES = sorted({k for k, _ in ON})
+# Aliases of types built here on AWS: one whose AWS ClusterResourceType is another module's
+# (postgres-crossplane) is that module's.
+ALIASES = sorted((a, k) for k in TYPES if "aws" in CATALOG["types"][k]["clouds"] and built_here(k, "aws")
+                 for a in CATALOG["types"][k].get("aliases") or [])
 
 
 def doc(path: Path) -> dict:
@@ -83,7 +93,8 @@ def test_parameters_and_outputs_match_the_catalog(kind):
         assert {"consumers", "tags"} <= set(params), f"{kind}: needs consumers and tags"
     names = [o["name"] for o in rt["spec"]["outputs"]]
     for cloud in t["clouds"]:
-        assert names == list(outputs(kind, cloud)), f"{kind}: outputs differ from the catalog's on {cloud}"
+        if built_here(kind, cloud):
+            assert names == list(outputs(kind, cloud)), f"{kind}: outputs differ from the catalog's on {cloud}"
     for p, spec in (t.get("parameters") or {}).items():
         if spec.get("required"):
             assert p in rt["spec"]["parameters"]["openAPIV3Schema"].get("required", []), f"{kind}: {p} is required"
@@ -93,8 +104,6 @@ def test_parameters_and_outputs_match_the_catalog(kind):
 def test_version_1_types_stay_for_their_resources(alias, kind):
     """An alias keeps its ClusterResourceType, XRD and AWS Composition, so the resources made under
     it never change type; its parameters are the neutral type's."""
-    if kind in OPENCHOREO_TYPES:
-        return
     for path in (f"apis/{alias}/definition.yaml", f"apis/{alias}/resource-type.yaml", f"aws/{alias}-composition.yaml"):
         assert (ROOT / path).is_file(), f"{alias}: {path} is missing"
     old = doc(ROOT / f"apis/{alias}/resource-type.yaml")["spec"]["parameters"]["openAPIV3Schema"]["properties"]
@@ -124,7 +133,8 @@ def test_the_resource_type_renders_its_xrd(kind):
     assert set(template["spec"]) == set(spec)
     status = xrd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"]["properties"]
     for o in rt["spec"]["outputs"]:
-        field = re.search(r"status\.(\w+)", o["value"]).group(1)
+        # A value, or a Secret's key: the Secret's name is in the status, the value never is.
+        field = re.search(r"status\.(\w+)", o.get("value") or o["secretKeyRef"]["name"]).group(1)
         assert field in status, f"{kind}: output {o['name']} reads status.{field}, which the XRD lacks"
 
 
@@ -165,7 +175,7 @@ def composed_alarms(path: str) -> dict[str, dict]:
     """The alarms a Composition builds: its $alarms list, field by field."""
     out = {}
     for m in ALARM.finditer((ROOT / path).read_text()):
-        fields = dict(re.findall(r'"(\w+)" ("[^"]*"|\d+|\([^)]*\))', m.group("rest")))
+        fields = dict(re.findall(r'"(\w+)" ("[^"]*"|\d+|\$\w+|\([^)]*\))', m.group("rest")))
         out[m.group("name")] = {k: v.strip('"') for k, v in fields.items()} | {"says": m.group("says").replace('\\"', '"')}
     return out
 

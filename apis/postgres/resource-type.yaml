@@ -1,0 +1,98 @@
+# A PostgreSQL database, as an OpenChoreo ClusterResourceType (constitution VX-19, catalog type
+# postgres). Apply on Google Cloud installations' control planes; on AWS the catalog makes postgres
+# resources as OpenChoreo's postgres-crossplane. The parameters are what a design's Resources line
+# sets (the SDLC tool fills consumers and tags); environmentConfigs.size is set per environment by
+# the binding. It renders one PostgresDatabase into the cell namespace; the data plane's
+# Composition builds it as Cloud SQL in that environment's project. Components get the
+# credentials as outputs: the password by reference to its Secret, never as a value.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: postgres
+  annotations:
+    openchoreo.dev/description: >-
+      A PostgreSQL database, built by the Valxel platform's Crossplane Composition on a private IP with
+      encryption, backups, point-in-time recovery and deletion protection.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [database]
+      properties:
+        database:
+          type: string
+          description: The database's name. Never changes.
+          pattern: "^[a-z][a-z0-9_]{0,62}$"
+        version:
+          type: string
+          description: The PostgreSQL major version.
+          enum: ["15", "16", "17"]
+          default: "17"
+        consumers:
+          type: array
+          description: >-
+            The components that use it (written by the SDLC tool from the approved design). They sign in
+            with the credentials in its outputs; no cloud roles.
+          default: []
+          items:
+            type: object
+            required: [component, actions]
+            properties:
+              component:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+              access:
+                type: array
+                items: {type: string, enum: [read, write, delete]}
+              actions:
+                type: array
+                maxItems: 0
+                items: {type: string}
+        tags:
+          type: object
+          description: Labels for the cloud resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, medium-ha, large]
+          default: small
+
+  # Its data outlives the binding: the database stays until a person deletes it.
+  retainPolicy: Retain
+
+  outputs:
+    - name: host
+      value: ${applied.instance.status.host}
+    - name: port
+      value: ${applied.instance.status.port}
+    - name: database
+      value: ${applied.instance.status.database}
+    - name: username
+      value: ${applied.instance.status.username}
+    - name: password
+      secretKeyRef:
+        name: ${applied.instance.status.secret}
+        key: password
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.host)}"
+      template:
+        apiVersion: platform.valxel.dev/v1alpha1
+        kind: PostgresDatabase
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          database: ${parameters.database}
+          version: ${parameters.version}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

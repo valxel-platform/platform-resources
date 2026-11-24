@@ -1,0 +1,60 @@
+# The composed resources as the provider reports them once Google Cloud has finished: pass with --observed-resources to render a later reconcile, where the XR gets its outputs and the password is kept.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: r-field-records-development-1a2b3c4d-postgres
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: password
+type: Opaque
+data:
+  password: cmVuZGVyLWZpeHR1cmUtcGFzc3dvcmQtbm90LXJlYWw=
+---
+apiVersion: sql.gcp.m.upbound.io/v1beta1
+kind: DatabaseInstance
+metadata:
+  name: r-field-records-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: instance
+status:
+  atProvider:
+    privateIpAddress: 10.20.0.5
+    connectionName: agtech-development:us-central1:vx-r-field-records-development-1a2b3c4d-1f2e3d4c
+  conditions:
+  - type: Ready
+    status: "True"
+    reason: Available
+    lastTransitionTime: "2026-11-24T00:00:00Z"
+---
+apiVersion: sql.gcp.m.upbound.io/v1beta1
+kind: Database
+metadata:
+  name: r-field-records-development-1a2b3c4d-db
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: database
+status:
+  atProvider:
+    id: projects/agtech-development/instances/vx-r-field-records-development-1a2b3c4d/databases/field_records
+  conditions:
+  - type: Ready
+    status: "True"
+    reason: Available
+    lastTransitionTime: "2026-11-24T00:00:00Z"
+---
+apiVersion: sql.gcp.m.upbound.io/v1beta1
+kind: User
+metadata:
+  name: r-field-records-development-1a2b3c4d-app
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: user
+status:
+  atProvider:
+    id: app//vx-r-field-records-development-1a2b3c4d
+  conditions:
+  - type: Ready
+    status: "True"
+    reason: Available
+    lastTransitionTime: "2026-11-24T00:00:00Z"

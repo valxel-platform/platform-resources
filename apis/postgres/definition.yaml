@@ -1,0 +1,79 @@
+# The PostgresDatabase API: a PostgreSQL database of the catalog's postgres type. The postgres
+# ClusterResourceType creates one in the cell namespace of each environment it is bound to;
+# gcp/postgres-composition.yaml builds it (Cloud SQL). Install on Google Cloud data planes: on AWS
+# the type is OpenChoreo's postgres-crossplane (the catalog's resource_type).
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: postgresdatabases.platform.valxel.dev
+spec:
+  scope: Namespaced
+  group: platform.valxel.dev
+  names:
+    kind: PostgresDatabase
+    plural: postgresdatabases
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [database]
+              properties:
+                database:
+                  type: string
+                  description: The database's name. Never changes.
+                  pattern: "^[a-z][a-z0-9_]{0,62}$"
+                version:
+                  type: string
+                  description: The PostgreSQL major version.
+                  enum: ["15", "16", "17"]
+                  default: "17"
+                consumers:
+                  type: array
+                  description: >-
+                    The components that use it (written by the SDLC tool from the approved design). They
+                    sign in with the credentials in its outputs; no cloud roles.
+                  default: []
+                  items:
+                    type: object
+                    required: [component, actions]
+                    properties:
+                      component:
+                        type: string
+                        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                      access:
+                        type: array
+                        items: {type: string, enum: [read, write, delete]}
+                      actions:
+                        type: array
+                        maxItems: 0
+                        items: {type: string}
+                tags:
+                  type: object
+                  description: Labels for the cloud resources (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; the Composition maps it to a tier, HA and max_connections.
+                  enum: [small, medium, medium-ha, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                host:
+                  type: string
+                port:
+                  type: string
+                database:
+                  type: string
+                username:
+                  type: string
+                secret:
+                  type: string
+                  description: The Secret in the cell namespace holding the user's password (key password).
