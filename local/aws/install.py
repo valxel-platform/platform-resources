@@ -10,8 +10,11 @@ It connects the moto container to the cluster's Docker network and names it in t
 installs the functions and the AWS providers (without EKS and Kafka, which have no local stand-in)
 and points them at moto (provider-config.yaml); then the settings, the XRDs and the AWS
 Compositions, with workload identity in its local form. --crossplane installs Crossplane first
-(the platform's version), --resource-types also OpenChoreo's ClusterResourceTypes. Needs docker,
-kubectl and, with --crossplane, helm. Safe to run again."""
+(the platform's version). --openchoreo, for a cluster with OpenChoreo in it, also installs
+OpenChoreo's ClusterResourceTypes, so a Resource bound to an environment goes OpenChoreo ->
+Crossplane -> moto, and embeds the valxel-local-aws trait (component-trait.yaml) in every
+ClusterComponentType, so components' pods reach moto too. Needs docker, kubectl and, with
+--crossplane, helm. Safe to run again."""
 
 from __future__ import annotations
 
@@ -57,13 +60,31 @@ def moto_address(moto: str, network: str) -> str:
     return joined[network]["IPAddress"]
 
 
+TRAIT = {"kind": "ClusterTrait", "name": "valxel-local-aws", "instanceName": "valxel-local-aws"}
+
+
+def with_local_aws(types: list[dict]) -> list[dict]:
+    """The ClusterComponentTypes, each with the valxel-local-aws trait embedded once."""
+    out = []
+    for t in types:
+        traits = t.setdefault("spec", {}).setdefault("traits", [])
+        if not any(x.get("name") == TRAIT["name"] for x in traits):
+            traits.append(dict(TRAIT))
+        meta = t["metadata"]
+        out.append({"apiVersion": t["apiVersion"], "kind": t["kind"], "spec": t["spec"],
+                    "metadata": {"name": meta["name"], "labels": meta.get("labels") or {},
+                                 "annotations": meta.get("annotations") or {}}})
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--context", required=True, help="the cluster's kubectl context, e.g. k3d-valxel")
     p.add_argument("--moto", default="valxel-moto", help="the moto container's name")
     p.add_argument("--network", default="", help="the cluster's Docker network (default: the k3d context's)")
     p.add_argument("--crossplane", action="store_true", help="install Crossplane first")
-    p.add_argument("--resource-types", action="store_true", help="also OpenChoreo's ClusterResourceTypes")
+    p.add_argument("--openchoreo", "--resource-types", dest="openchoreo", action="store_true",
+                   help="OpenChoreo is in the cluster: its ClusterResourceTypes, and components' pods pointed at moto")
     a = p.parse_args(argv)
     ctx, network = a.context, a.network or a.context  # k3d's network is named like its context
 
@@ -92,8 +113,11 @@ def main(argv: list[str] | None = None) -> int:
              if f.name.removesuffix("-composition.yaml") not in SKIP_COMPOSITIONS for d in load(f)]
     apply(ctx, comps + load(HERE / "workload-identity-composition.yaml"))
 
-    if a.resource_types:
+    if a.openchoreo:
         apply(ctx, [d for f in sorted((ROOT / "apis").glob("*/resource-type.yaml")) for d in load(f)])
+        apply(ctx, load(HERE / "component-trait.yaml"))
+        apply(ctx, with_local_aws(json.loads(run(["kubectl", "--context", ctx, "get", "clustercomponenttypes",
+                                                  "-o", "json"]))["items"]))
     print(f"AWS catalog installed in {ctx}; AWS calls go to moto at {ip}:5000")
     return 0
 
