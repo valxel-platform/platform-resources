@@ -1,0 +1,21 @@
+# A PostgresDatabase as OpenChoreo renders it into a cell namespace on an Azure data plane, tags as the SDLC tool writes them, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: PostgresDatabase
+metadata:
+  name: r-field-records-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  database: field_records
+  version: '17'
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions: []
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:resource: field-records
+    valxel:data-class: general
+  size: medium-ha

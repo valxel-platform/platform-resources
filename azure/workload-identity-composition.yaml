@@ -1,0 +1,98 @@
+# Builds a WorkloadIdentity on Azure (constitution VX-19, catalog type workload-identity): a
+# user-assigned managed identity for one component that only the component's Kubernetes service
+# account may sign in as (AKS Workload Identity, a federated credential on the cluster's OIDC
+# issuer). It has no roles of its own: each resource's Composition assigns it its declared access on
+# that resource only, finding it by its labels (valxel.dev/component, valxel.dev/namespace-hash).
+#
+#   UserAssignedIdentity          <namePrefix>-<24 hex of sha256(namespace/component)>
+#   FederatedIdentityCredential   issuer: the cluster's; subject:
+#                                 system:serviceaccount:<namespace>:<service account>
+#
+# status.roleArn is the identity's client ID (the type's `role` output, AZURE_CLIENT_ID): the
+# component's Kubernetes service account carries it as azure.workload.identity/client-id.
+# Settings come from the data plane's valxel-azure EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: workload-identity-azure
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: WorkloadIdentity
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-azure
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $ksa := $xr.spec.service_account | default $xr.spec.component }}
+            {{- $name := printf "%s-%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace $xr.spec.component | sha256sum | trunc 24) }}
+            {{- $id := printf "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ManagedIdentity/userAssignedIdentities/%s" $env.subscription $env.resourceGroup $name }}
+            {{- $client := "" }}
+            {{- with getComposedResource . "identity" }}{{- $client = dig "status" "atProvider" "clientId" "" . }}{{- end }}
+            ---
+            apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+            kind: UserAssignedIdentity
+            metadata:
+              name: {{ $xr.metadata.name }}
+              labels:
+                valxel.dev/component: {{ $xr.spec.component | quote }}
+                valxel.dev/namespace-hash: {{ $nsHash | quote }}
+              annotations:
+                {{ setResourceNameAnnotation "identity" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                tags:
+                  {{- range $k, $v := merge (dict "valxel:component" $xr.spec.component) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+            kind: FederatedIdentityCredential
+            metadata:
+              name: {{ printf "%s-k8s" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "federation" }}
+                crossplane.io/external-name: kubernetes
+            spec:
+              forProvider:
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                parentId: {{ $id | quote }}
+                issuer: {{ $env.oidcIssuer | quote }}
+                subject: {{ printf "system:serviceaccount:%s:%s" $xr.metadata.namespace $ksa | quote }}
+                audience: ["api://AzureADTokenExchange"]
+            {{- if $client }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: WorkloadIdentity
+            status:
+              roleArn: {{ $client | quote }}
+              roleName: {{ $name | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

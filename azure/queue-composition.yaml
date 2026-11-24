@@ -1,0 +1,210 @@
+# Builds a Queue as an Azure Service Bus queue in a Standard namespace of its own, with its
+# dead-letter queue (constitution VX-19, catalog type queue on Azure).
+#
+#   ServiceBusNamespace  Standard, SAS keys off, TLS 1.2 (Standard has no private endpoints or
+#                        customer-managed keys: Premium has both)
+#   Queue                lock duration visibility_timeout_s, maxDeliveryCount max_receives, sessions
+#                        when fifo, expired messages dead-lettered
+#   RoleAssignment       Service Bus Data Sender or Receiver per consumer, on this queue only
+#   MonitorMetricAlert   the catalog's alarms: a backlog, anything dead-lettered
+#
+# status.sendTo and receiveFrom are <namespace>.servicebus.windows.net/<queue>.
+# Settings come from the data plane's valxel-azure EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: queue-azure
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: Queue
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-azure
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $hash := printf "%s/%s" $xr.metadata.namespace $xr.metadata.name | sha256sum | trunc 12 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+            {{- $short := regexReplaceAll "[^a-z0-9]" (lower ($xr.metadata.name | trimPrefix "r-")) "" | trunc 10 }}
+            {{- /* Globally unique names: the prefix, a little of the resource's name, and a hash of its namespace and name. */}}
+            {{- $base := printf "%s-%s-%s" $env.namePrefix ($xr.metadata.name | trimPrefix "r-" | lower | trunc 20 | trimSuffix "-") $hash }}
+            {{- $rg := printf "/subscriptions/%s/resourceGroups/%s" $env.subscription $env.resourceGroup }}
+            {{- /* Each consumer's managed identity (its workload-identity), looked up by its labels. */}}
+            {{- $principal := dict }}
+            {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+            {{- $found := index (default (dict) $.extraResources) (printf "identity-%d" $i) }}
+            {{- range (default (list) (dig "items" (list) (default (dict) $found))) }}
+            {{- with dig "resource" "status" "atProvider" "principalId" "" . }}{{- $_ := set $principal $c.component . }}{{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $xr.spec.consumers }}
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+              identity-{{ $i }}:
+                apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+                kind: UserAssignedIdentity
+                matchLabels:
+                  valxel.dev/component: {{ $c.component | quote }}
+                  valxel.dev/namespace-hash: {{ $nsHash | quote }}
+              {{- end }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "valxel:product" | default "-") (index $tags "valxel:feature" | default "-")
+                  (index $tags "valxel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $name := $base | trunc 50 | trimSuffix "-" }}
+            {{- $nsId := printf "%s/providers/Microsoft.ServiceBus/namespaces/%s" $rg $name }}
+            {{- $qId := printf "%s/queues/queue" $nsId }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "queue" }}{{- $ready = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
+            ---
+            apiVersion: servicebus.azure.m.upbound.io/v1beta1
+            kind: ServiceBusNamespace
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "namespace" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                sku: Standard
+                localAuthEnabled: false
+                minimumTlsVersion: "1.2"
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: servicebus.azure.m.upbound.io/v1beta1
+            kind: Queue
+            metadata:
+              name: {{ printf "%s-queue" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "queue" }}
+                crossplane.io/external-name: queue
+            spec:
+              forProvider:
+                namespaceId: {{ $nsId | quote }}
+                lockDuration: {{ printf "PT%dS" (max 5 (min 300 (default 60 $xr.spec.visibility_timeout_s)) | int) | quote }}
+                maxDeliveryCount: {{ max 1 (min 2000 (default 5 $xr.spec.max_receives)) }}
+                requiresSession: {{ $xr.spec.fifo }}
+                deadLetteringOnMessageExpiration: true
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- $pid := index $principal $c.component | default "" }}
+            {{- if $pid }}
+            {{- range (default (list) $c.actions) }}
+            {{- if hasPrefix "role:" . }}
+            {{- $role := trimPrefix "role:" . }}
+            {{- $h := printf "%s|%s|%s" $qId $role $pid | sha256sum }}
+            ---
+            apiVersion: authorization.azure.m.upbound.io/v1beta1
+            kind: RoleAssignment
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component ($h | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component ($h | trunc 6)) }}
+            spec:
+              forProvider:
+                name: {{ printf "%s-%s-4%s-a%s-%s" (substr 0 8 $h) (substr 8 12 $h) (substr 13 16 $h) (substr 17 20 $h) (substr 20 32 $h) | quote }}
+                scope: {{ $qId | quote }}
+                roleDefinitionName: {{ $role | quote }}
+                principalId: {{ $pid | quote }}
+                principalType: ServicePrincipal
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- /* The catalog's standard alarms for queue on Azure (sdlc-governance platform/catalog.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "backlog" "metric" "ActiveMessages" "aggregation" "Average"
+                        "period" 300 "periods" 3 "above" 1000 "severity" "sev3"
+                        "says" "Over 1,000 messages have waited for 15 minutes: the consumer is slow or down.")
+                  (dict "name" "dead-letters" "metric" "DeadletteredMessages" "aggregation" "Maximum"
+                        "period" 300 "periods" 1 "above" 0 "severity" "sev3"
+                        "says" "Messages failed every delivery and are in the dead-letter queue.") }}
+            {{- if $env.alarmActionGroup }}
+            {{- $freq := dict "60" "PT1M" "300" "PT5M" "900" "PT15M" "1800" "PT30M" "3600" "PT1H" }}
+            {{- range $alarms }}
+            {{- $span := mul .period .periods }}
+            {{- $window := "PT1M" }}
+            {{- if gt $span 43200 }}{{ $window = "P1D" }}{{- else if gt $span 21600 }}{{ $window = "PT12H" }}{{- else if gt $span 3600 }}{{ $window = "PT6H" }}{{- else if gt $span 1800 }}{{ $window = "PT1H" }}{{- else if gt $span 900 }}{{ $window = "PT30M" }}{{- else if gt $span 300 }}{{ $window = "PT15M" }}{{- else if gt $span 60 }}{{ $window = "PT5M" }}{{- end }}
+            ---
+            apiVersion: insights.azure.m.upbound.io/v1beta1
+            kind: MonitorMetricAlert
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $base .name | quote }}
+            spec:
+              forProvider:
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                scopes: [{{ $nsId | quote }}]
+                description: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                severity: {{ index (dict "sev1" "0" "sev2" "1" "sev3" "2" "sev4" "3") .severity | default "2" }}
+                frequency: {{ index $freq (toString .period) | default "PT5M" | quote }}
+                windowSize: {{ $window | quote }}
+                autoMitigate: true
+                criteria:
+                  - metricNamespace: Microsoft.ServiceBus/namespaces
+                    metricName: {{ .metric | quote }}
+                    aggregation: {{ .aggregation | quote }}
+                    operator: GreaterThan
+                    threshold: {{ .above }}
+                    {{- with .where }}
+                    {{- $kv := splitList "=" . }}
+                    dimension:
+                      - name: {{ index $kv 0 | quote }}
+                        operator: Include
+                        values: [{{ index $kv 1 | quote }}]
+                    {{- end }}
+                action:
+                  - actionGroupId: {{ $env.alarmActionGroup | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: Queue
+            status:
+              sendTo: {{ printf "%s.servicebus.windows.net/queue" $name | quote }}
+              receiveFrom: {{ printf "%s.servicebus.windows.net/queue" $name | quote }}
+              id: {{ $qId | quote }}
+              deadLetterId: {{ printf "%s/$deadletterqueue" $qId | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

@@ -1,0 +1,36 @@
+# This data plane's Azure settings, read by every Composition in azure/: one data plane per product
+# environment, each in its own subscription (constitution VX-19, product.yaml runtime.cloud).
+# Fill in when the platform team sets up the environment (platform-foundation's azure module
+# outputs most of it); the SDLC tool never changes this file.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-azure
+data:
+  subscription: <subscription-id>
+  location: <region>
+  # The resource group every product resource goes in; Crossplane's identity may manage it only.
+  resourceGroup: <resource-group>
+  # The environment this data plane runs (as in product.yaml's pipeline); alerts carry it.
+  environment: <environment>
+  # Prepended to every Azure resource name, so these never collide with resources made by hand.
+  namePrefix: vx
+  # The product's key in Key Vault (versionless key ID) and the managed identity that may use it
+  # (Key Vault Crypto Service Encryption User): Cosmos DB, Blob Storage and PostgreSQL encrypt with it.
+  keyVaultKeyId: https://<vault>.vault.azure.net/keys/<key>
+  cmkIdentityId: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>
+  # The AKS cluster's OIDC issuer: components' identities trust their service accounts through it.
+  oidcIssuer: https://<region>.oic.prod-aks.azure.com/<tenant>/<cluster>/
+  # Private endpoints' subnet and each service's private DNS zone; PostgreSQL's delegated subnet and zone.
+  privateEndpointSubnetId: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>
+  privateDnsZones:
+    cosmos: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.documents.azure.com
+    blob: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net
+    eventhub: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net
+  postgresSubnetId: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<delegated-subnet>
+  postgresDnsZoneId: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/<name>.postgres.database.azure.com
+  # Optional: the AlarmRouting's action group (status.channel). Empty: no alerts.
+  alarmActionGroup: ""
+  # Tags on every resource, on top of the product, feature and data class tags each carries.
+  tags:
+    valxel:managed-by: crossplane

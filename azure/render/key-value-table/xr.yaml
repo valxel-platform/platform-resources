@@ -1,0 +1,30 @@
+# A KeyValueTable as OpenChoreo renders it into a cell namespace on an Azure data plane, tags as the SDLC tool writes them, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: KeyValueTable
+metadata:
+  name: r-field-state-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  partition_key: field_id
+  sort_key: reading_at
+  ttl_attribute: expires_at
+  indexes:
+  - by-farm:farm_id:reading_at
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - cosmos:Cosmos DB Built-in Data Contributor
+    - cosmos:Cosmos DB Built-in Data Reader
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - cosmos:Cosmos DB Built-in Data Reader
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small

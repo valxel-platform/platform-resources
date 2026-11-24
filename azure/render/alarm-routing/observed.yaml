@@ -1,0 +1,16 @@
+# The action group as the provider reports it once made, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: insights.azure.m.upbound.io/v1beta1
+kind: MonitorActionGroup
+metadata:
+  name: sdlc-tool
+  namespace: crossplane-system
+  annotations:
+    crossplane.io/composition-resource-name: action-group
+status:
+  atProvider:
+    id: /subscriptions/1b2c3d4e-0000-4000-8000-00000000aa01/resourceGroups/vx-agtech-development/providers/Microsoft.Insights/actionGroups/vx-valxel-sdlc
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-24T00:00:00Z'

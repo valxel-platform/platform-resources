@@ -1,0 +1,92 @@
+# Builds an AlarmRouting on Azure: an action group with a webhook receiver that sends every metric
+# alert the azure/ Compositions make to the SDLC tool's Azure Monitor signal endpoint
+# (https://<host>/api/signals/azure-monitor), in the common alert schema. Action groups send no
+# header of ours, so the token rides the URL: on Azure the tokenSecretRef key holds the
+# subscription's signals token (`valxel signals-token subscription <id>`), read from that Secret
+# here. It ends up in the action group's configuration, which only the subscription's readers see.
+# One per data plane; its status.channel (the action group's ID) goes in the valxel-azure
+# EnvironmentConfig as alarmActionGroup.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: alarm-routing-azure
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: AlarmRouting
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-azure
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $name := printf "%s-valxel-sdlc" $env.namePrefix }}
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              token:
+                apiVersion: v1
+                kind: Secret
+                matchName: {{ $xr.spec.tokenSecretRef.name | quote }}
+            {{- $token := "" }}
+            {{- range (dig "items" (list) (index (default (dict) .extraResources) "token" | default (dict))) }}
+            {{- $token = dig "resource" "data" $xr.spec.tokenSecretRef.key "" . | b64dec }}
+            {{- end }}
+            {{- $channel := "" }}
+            {{- with getComposedResource . "action-group" }}{{- $channel = dig "status" "atProvider" "id" "" . }}{{- end }}
+            {{- if $token }}
+            ---
+            apiVersion: insights.azure.m.upbound.io/v1beta1
+            kind: MonitorActionGroup
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "action-group" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              forProvider:
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                location: global
+                shortName: valxel
+                enabled: true
+                webhookReceiver:
+                  - name: valxel-sdlc
+                    serviceUri: {{ printf "%s?token=%s" (regexReplaceAll "/signals/[a-z-]+$" $xr.spec.endpoint "/signals/azure-monitor") $token | quote }}
+                    useCommonAlertSchema: true
+                tags:
+                  {{- range $k, $v := (default (dict) $env.tags) }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- if $channel }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: AlarmRouting
+            status:
+              channel: {{ $channel | quote }}
+              ruleName: {{ $name | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

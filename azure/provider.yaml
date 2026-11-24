@@ -91,5 +91,14 @@ spec:
   runtimeConfigRef:
     name: provider-azure
 ---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-azure-network
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-azure-network:v2.7.0
+  runtimeConfigRef:
+    name: provider-azure
+---
 # The Kafka types use provider-kafka against the environment's Strimzi cluster (strimzi/), as on
 # Google Cloud; strimzi/provider.yaml installs it.

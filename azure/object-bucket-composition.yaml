@@ -1,0 +1,197 @@
+# Builds an ObjectBucket as an Azure storage account and container of its own (constitution
+# VX-19, catalog type object-bucket on Azure).
+#
+#   Account            StorageV2, shared keys off (Entra ID only), public access off, TLS 1.2,
+#                      versioning, soft delete, customer-managed key (the product's)
+#   Container          `objects`, private
+#   PrivateEndpoint    blob, in the data plane's endpoints subnet, with the private DNS zone
+#   RoleAssignment     Storage Blob Data Reader or Contributor per consumer, on this container only
+#
+# status.bucket is https://<account>.blob.core.windows.net/objects. Never deleted with its binding.
+# Settings come from the data plane's valxel-azure EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: object-bucket-azure
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: ObjectBucket
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-azure
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $hash := printf "%s/%s" $xr.metadata.namespace $xr.metadata.name | sha256sum | trunc 12 }}
+            {{- $tags := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.tags) }}
+            {{- $short := regexReplaceAll "[^a-z0-9]" (lower ($xr.metadata.name | trimPrefix "r-")) "" | trunc 10 }}
+            {{- /* Globally unique names: the prefix, a little of the resource's name, and a hash of its namespace and name. */}}
+            {{- $base := printf "%s-%s-%s" $env.namePrefix ($xr.metadata.name | trimPrefix "r-" | lower | trunc 20 | trimSuffix "-") $hash }}
+            {{- $rg := printf "/subscriptions/%s/resourceGroups/%s" $env.subscription $env.resourceGroup }}
+            {{- /* Each consumer's managed identity (its workload-identity), looked up by its labels. */}}
+            {{- $principal := dict }}
+            {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+            {{- $found := index (default (dict) $.extraResources) (printf "identity-%d" $i) }}
+            {{- range (default (list) (dig "items" (list) (default (dict) $found))) }}
+            {{- with dig "resource" "status" "atProvider" "principalId" "" . }}{{- $_ := set $principal $c.component . }}{{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $xr.spec.consumers }}
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: ExtraResources
+            requirements:
+              {{- range $i, $c := (default (list) $xr.spec.consumers) }}
+              identity-{{ $i }}:
+                apiVersion: managedidentity.azure.m.upbound.io/v1beta1
+                kind: UserAssignedIdentity
+                matchLabels:
+                  valxel.dev/component: {{ $c.component | quote }}
+                  valxel.dev/namespace-hash: {{ $nsHash | quote }}
+              {{- end }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $tags "valxel:product" | default "-") (index $tags "valxel:feature" | default "-")
+                  (index $tags "valxel:resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $name := printf "%s%s%s" $env.namePrefix $short $hash | trunc 24 }}
+            {{- $acct := printf "%s/providers/Microsoft.Storage/storageAccounts/%s" $rg $name }}
+            {{- $cId := printf "%s/blobServices/default/containers/objects" $acct }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "container" }}{{- $ready = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
+            ---
+            apiVersion: storage.azure.m.upbound.io/v1beta1
+            kind: Account
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "account" }}
+                crossplane.io/external-name: {{ $name | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                accountKind: StorageV2
+                accountTier: Standard
+                accountReplicationType: ZRS
+                minTlsVersion: TLS1_2
+                httpsTrafficOnlyEnabled: true
+                sharedAccessKeyEnabled: false
+                defaultToOauthAuthentication: true
+                allowNestedItemsToBePublic: false
+                publicNetworkAccessEnabled: false
+                blobProperties:
+                  versioningEnabled: {{ $xr.spec.versioning }}
+                  deleteRetentionPolicy:
+                    days: 7
+                  containerDeleteRetentionPolicy:
+                    days: 7
+                identity:
+                  type: UserAssigned
+                  identityIds: [{{ $env.cmkIdentityId | quote }}]
+                customerManagedKey:
+                  keyVaultKeyId: {{ $env.keyVaultKeyId | quote }}
+                  userAssignedIdentityId: {{ $env.cmkIdentityId | quote }}
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: storage.azure.m.upbound.io/v1beta1
+            kind: Container
+            metadata:
+              name: {{ printf "%s-objects" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "container" }}
+                crossplane.io/external-name: objects
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                storageAccountId: {{ $acct | quote }}
+                containerAccessType: private
+            ---
+            apiVersion: network.azure.m.upbound.io/v1beta1
+            kind: PrivateEndpoint
+            metadata:
+              name: {{ printf "%s-pe" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "private-endpoint" }}
+                crossplane.io/external-name: {{ printf "%s-pe" $base | quote }}
+            spec:
+              forProvider:
+                location: {{ $env.location | quote }}
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                subnetId: {{ $env.privateEndpointSubnetId | quote }}
+                privateServiceConnection:
+                  name: {{ printf "%s-pe" $base | quote }}
+                  isManualConnection: false
+                  privateConnectionResourceId: {{ $acct | quote }}
+                  subresourceNames: [blob]
+                privateDnsZoneGroup:
+                  name: default
+                  privateDnsZoneIds: [{{ index $env.privateDnsZones "blob" | quote }}]
+                tags:
+                  {{- range $k, $v := $tags }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- $pid := index $principal $c.component | default "" }}
+            {{- if $pid }}
+            {{- range (default (list) $c.actions) }}
+            {{- if hasPrefix "role:" . }}
+            {{- $role := trimPrefix "role:" . }}
+            {{- $h := printf "%s|%s|%s" $cId $role $pid | sha256sum }}
+            ---
+            apiVersion: authorization.azure.m.upbound.io/v1beta1
+            kind: RoleAssignment
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component ($h | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component ($h | trunc 6)) }}
+            spec:
+              forProvider:
+                name: {{ printf "%s-%s-4%s-a%s-%s" (substr 0 8 $h) (substr 8 12 $h) (substr 13 16 $h) (substr 17 20 $h) (substr 20 32 $h) | quote }}
+                scope: {{ $cId | quote }}
+                roleDefinitionName: {{ $role | quote }}
+                principalId: {{ $pid | quote }}
+                principalType: ServicePrincipal
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: ObjectBucket
+            status:
+              bucket: {{ printf "https://%s.blob.core.windows.net/objects" $name | quote }}
+              id: {{ $acct | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready
