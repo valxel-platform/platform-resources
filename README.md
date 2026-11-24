@@ -179,13 +179,14 @@ every change to `aws/` or `apis/`.
 
 ```sh
 docker run -d --name valxel-moto motoserver/moto:5.2.6
-python3 local/aws/install.py --context k3d-<cluster> --crossplane   # --resource-types beside OpenChoreo
+python3 local/aws/install.py --context k3d-<cluster> --crossplane   # --openchoreo beside OpenChoreo
 local/aws/e2e/check.sh k3d-<cluster>                                # a feature's resources, end to end
 ```
 
 What differs from AWS:
 - Workload identity makes the IAM role without the EKS Pod Identity association. Moto has no EKS
-  Pod Identity, and k3d isn't EKS.
+  Pod Identity, and k3d isn't EKS. Beside OpenChoreo (`--openchoreo`), the `valxel-local-aws`
+  trait, embedded in every component type, gives components' pods moto's endpoint instead.
 - Kafka topics and users aren't installed: there is no local MSK.
 - Moto accepts any credentials and evaluates no IAM policy, Object Lock or KMS key policy. Passing
   here shows the Compositions and providers work end to end, not that the access they grant is right.
