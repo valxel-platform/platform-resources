@@ -60,6 +60,21 @@ def moto_address(moto: str, network: str) -> str:
     return joined[network]["IPAddress"]
 
 
+def resource_types(compositions: list[dict]) -> list[dict]:
+    """OpenChoreo's ClusterResourceTypes for what a Composition was installed for, and no others: a
+    type with nothing to build it would only fail when bound. (postgres on AWS is OpenChoreo's own
+    postgres-crossplane, and kafka has no local stand-in.) A name OpenChoreo's samples already use,
+    such as postgres, is so left alone."""
+    kinds = {c["spec"]["compositeTypeRef"]["kind"] for c in compositions}
+    out = []
+    for f in sorted((ROOT / "apis").glob("*/resource-type.yaml")):
+        for d in load(f):
+            made = {r.get("template", {}).get("kind") for r in d.get("spec", {}).get("resources") or []}
+            if made & kinds:
+                out.append(d)
+    return out
+
+
 TRAIT = {"kind": "ClusterTrait", "name": "valxel-local-aws", "instanceName": "valxel-local-aws"}
 
 
@@ -114,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     apply(ctx, comps + load(HERE / "workload-identity-composition.yaml"))
 
     if a.openchoreo:
-        apply(ctx, [d for f in sorted((ROOT / "apis").glob("*/resource-type.yaml")) for d in load(f)])
+        apply(ctx, resource_types(comps))
         apply(ctx, load(HERE / "component-trait.yaml"))
         apply(ctx, with_local_aws(json.loads(run(["kubectl", "--context", ctx, "get", "clustercomponenttypes",
                                                   "-o", "json"]))["items"]))
