@@ -63,6 +63,7 @@ spec:
                 crossplane.io/external-name: {{ $name | quote }}
             spec:
               forProvider:
+                name: {{ $name | quote }}
                 location: {{ $env.location | quote }}
                 resourceGroupName: {{ $env.resourceGroup | quote }}
                 tags:

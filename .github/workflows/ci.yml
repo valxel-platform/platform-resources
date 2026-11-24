@@ -85,6 +85,7 @@ jobs:
                   yaml.safe_dump_all(docs, f, sort_keys=False)
           PY
           # The CLI moved validate under `resource`; older ones have it under `beta`.
+          set -o pipefail  # a failed validation fails the step, through tee
           # A missing schema fails too, but for Cilium's policies (the data plane's CNI, no package).
           if crossplane resource validate --help >/dev/null 2>&1; then
             crossplane resource validate extensions.yaml composed/ --skip-success-results | tee validate.txt
