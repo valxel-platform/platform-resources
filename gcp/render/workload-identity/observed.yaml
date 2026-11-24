@@ -1,0 +1,16 @@
+# The service account as the provider reports it once made, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
+kind: ServiceAccount
+metadata:
+  name: r-agtech-field-api-identity-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+  annotations:
+    crossplane.io/composition-resource-name: service-account
+status:
+  atProvider:
+    email: vx-b3c0c81e6a6cee1a89027ae5@agtech-development.iam.gserviceaccount.com
+  conditions:
+  - type: Ready
+    status: 'True'
+    reason: Available
+    lastTransitionTime: '2026-11-06T00:00:00Z'

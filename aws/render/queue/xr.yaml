@@ -1,0 +1,25 @@
+# Written by scripts/neutral.py from aws/render/sqs-queue/xr.yaml: change that file and run the script, not this one.
+# A SqsQueue as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: Queue
+metadata:
+  name: r-jobs-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  fifo: true
+  visibility_timeout_s: 120
+  max_receives: 3
+  consumers:
+  - component: agtech-field-api
+    access:
+    - write
+    actions:
+    - sqs:SendMessage
+    - sqs:GetQueueAttributes
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:resource: jobs
+    valxel:data-class: general
+  size: small

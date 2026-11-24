@@ -1,0 +1,12 @@
+# An AlarmRouting as the platform team creates it on a Google Cloud data plane, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: aws.platform.valxel.dev/v1alpha1
+kind: AlarmRouting
+metadata:
+  name: sdlc-tool
+  namespace: crossplane-system
+spec:
+  endpoint: https://sdlc.valxel.dev/api/signals/cloud-monitoring
+  tokenSecretRef:
+    name: valxel-signals-token
+    key: token
+  rateLimitPerSecond: 10

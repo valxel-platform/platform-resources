@@ -1,0 +1,88 @@
+# Builds a WorkloadIdentity on Google Cloud (constitution VX-19, catalog type workload-identity):
+# a Google service account for one component, which only that component's Kubernetes service
+# account may act as (GKE Workload Identity). It has no roles of its own: each resource's
+# Composition grants it its declared access on that resource only. It never has keys.
+#
+#   ServiceAccount            <namePrefix><24 hex of sha256(namespace/component)>, the id every
+#                             resource Composition in gcp/ grants to
+#   ServiceAccountIAMMember   roles/iam.workloadIdentityUser for
+#                             <project>.svc.id.goog[<namespace>/<service account>]
+#
+# status.roleArn is the account's email (the type's `role` output, GCP_SERVICE_ACCOUNT): the
+# component's Kubernetes service account carries it as iam.gke.io/gcp-service-account.
+# Settings come from the data plane's valxel-gcp EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: workload-identity-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: aws.platform.valxel.dev/v1alpha1
+    kind: WorkloadIdentity
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $ksa := $xr.spec.service_account | default $xr.spec.component }}
+            {{- $id := printf "%s%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace $xr.spec.component | sha256sum | trunc 24) }}
+            {{- $email := printf "%s@%s.iam.gserviceaccount.com" $id $env.project }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "service-account" }}{{- $ready = eq (dig "status" "atProvider" "email" "" .) $email }}{{- end }}
+            ---
+            apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
+            kind: ServiceAccount
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "service-account" }}
+                crossplane.io/external-name: {{ $id | quote }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                displayName: {{ printf "%s (%s)" $xr.spec.component $xr.metadata.namespace | trunc 100 | quote }}
+                description: {{ printf "valxel workload identity: %s/%s" $xr.metadata.namespace $ksa | quote }}
+            ---
+            apiVersion: cloudplatform.gcp.m.upbound.io/v1beta1
+            kind: ServiceAccountIAMMember
+            metadata:
+              name: {{ printf "%s-wi" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "workload-identity" }}
+            spec:
+              forProvider:
+                serviceAccountId: {{ printf "projects/%s/serviceAccounts/%s" $env.project $email | quote }}
+                role: roles/iam.workloadIdentityUser
+                member: {{ printf "serviceAccount:%s.svc.id.goog[%s/%s]" $env.project $xr.metadata.namespace $ksa | quote }}
+            {{- if $ready }}
+            ---
+            apiVersion: aws.platform.valxel.dev/v1alpha1
+            kind: WorkloadIdentity
+            status:
+              roleArn: {{ $email | quote }}
+              roleName: {{ $id | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

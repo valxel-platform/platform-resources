@@ -1,0 +1,28 @@
+# Written by scripts/neutral.py from aws/render/kinesis-stream/xr.yaml: change that file and run the script, not this one.
+# A KinesisStream as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: EventStream
+metadata:
+  name: r-readings-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  retention_hours: 168
+  consumers:
+  - component: agtech-sensor-api
+    access:
+    - write
+    actions:
+    - kinesis:PutRecord
+    - kinesis:PutRecords
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - kinesis:GetRecords
+    - kinesis:GetShardIterator
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: medium

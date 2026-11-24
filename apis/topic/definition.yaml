@@ -1,0 +1,62 @@
+# Written by scripts/neutral.py from apis/sns-topic/definition.yaml: change that file and run the script, not this one.
+# The Topic API (the topic type, built as sns-topic on AWS): An Amazon SNS topic. The topic ClusterResourceType creates one in the cell namespace of
+# each environment it is bound to; aws/topic-composition.yaml and gcp/topic-composition.yaml build it. Install on every data plane.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: topics.platform.valxel.dev
+spec:
+  scope: Namespaced
+  group: platform.valxel.dev
+  names:
+    kind: Topic
+    plural: topics
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                fifo:
+                  type: boolean
+                  description: Ordered, deduplicated delivery to FIFO queues. Never changes.
+                  default: false
+                consumers:
+                  type: array
+                  description: >-
+                    The components that use it and the access each is given (IAM actions on AWS, roles on Google Cloud) on it, from the
+                    platform catalog's access (written by the SDLC tool from the approved design).
+                  default: []
+                  items:
+                    type: object
+                    required: [component, actions]
+                    properties:
+                      component:
+                        type: string
+                        pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+                      access:
+                        type: array
+                        items: {type: string, enum: [read, write, delete]}
+                      actions:
+                        type: array
+                        items: {type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+)$"}
+                tags:
+                  type: object
+                  description: Tags for the AWS resources (product, feature, data class).
+                  default: {}
+                  additionalProperties: {type: string}
+                size:
+                  type: string
+                  description: Relative size; the Composition maps it to capacity.
+                  enum: [small, medium, large]
+                  default: small
+            status:
+              type: object
+              properties:
+                topic:
+                  type: string

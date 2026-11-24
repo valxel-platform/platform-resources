@@ -1,0 +1,96 @@
+# Written by scripts/neutral.py from apis/sqs-queue/resource-type.yaml: change that file and run the script, not this one.
+# An Amazon SQS queue with its dead-letter queue, as an OpenChoreo ClusterResourceType (constitution VX-19). Apply on the control plane.
+# The parameters are what a design's Resources line sets (the SDLC tool fills consumers and tags);
+# environmentConfigs.size is set per environment by the binding. It renders one SqsQueue into the
+# cell namespace; the data plane's Composition builds it in that environment's AWS account.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: queue
+  annotations:
+    openchoreo.dev/description: >-
+      An Amazon SQS queue with its dead-letter queue, built by the Valxel platform's Crossplane Composition with encryption, private
+      access and least-privilege IAM.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      properties:
+        fifo:
+          type: boolean
+          description: First in, first out per message group. Never changes.
+          default: false
+        visibility_timeout_s:
+          type: integer
+          description: Seconds a received message stays hidden before it is retried.
+          minimum: 0
+          maximum: 43200
+          default: 60
+        max_receives:
+          type: integer
+          description: Receives before a message moves to the dead-letter queue.
+          minimum: 1
+          maximum: 1000
+          default: 5
+        consumers:
+          type: array
+          description: >-
+            The components that use it and the access each is given (IAM actions on AWS, roles on Google Cloud) on it, from the
+            platform catalog's access (written by the SDLC tool from the approved design).
+          default: []
+          items:
+            type: object
+            required: [component, actions]
+            properties:
+              component:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+              access:
+                type: array
+                items: {type: string, enum: [read, write, delete]}
+              actions:
+                type: array
+                items: {type: string, pattern: "^([a-z0-9-]+:[A-Za-z*]+|roles/[A-Za-z0-9_.]+)$"}
+        tags:
+          type: object
+          description: Tags for the AWS resources (product, feature, data class).
+          default: {}
+          additionalProperties: {type: string}
+
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      properties:
+        size:
+          type: string
+          enum: [small, medium, large]
+          default: small
+
+  # Nothing stored that outlives it.
+  retainPolicy: Delete
+
+  outputs:
+    - name: send_to
+      value: ${applied.instance.status.sendTo}
+    - name: receive_from
+      value: ${applied.instance.status.receiveFrom}
+    - name: id
+      value: ${applied.instance.status.id}
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.sendTo) && has(applied.instance.status.id)}"
+      template:
+        apiVersion: platform.valxel.dev/v1alpha1
+        kind: Queue
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          fifo: ${parameters.fifo}
+          visibility_timeout_s: ${parameters.visibility_timeout_s}
+          max_receives: ${parameters.max_receives}
+          consumers: ${parameters.consumers}
+          tags: ${parameters.tags}
+          size: ${environmentConfigs.size}

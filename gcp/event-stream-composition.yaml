@@ -1,0 +1,197 @@
+# Builds an EventStream as a Pub/Sub topic that keeps its messages retention_hours, with a
+# subscription per reader (<stream>-<component>) that can seek back within that time (constitution
+# VX-19, catalog type event-stream on Google Cloud).
+#
+#   Topic                   CMEK with the product key, ordered delivery per key, messages kept
+#   Subscription            one per reader, never expiring, ordered, acked messages retained for replay
+#   TopicIAMMember          writers: their roles on the topic
+#   SubscriptionIAMMember   readers: their roles on their own subscription only
+#   AlertPolicy             the catalog's alarm: a reader too far behind
+#
+# Never deleted with its binding: no Delete in managementPolicies.
+# Settings come from the data plane's valxel-gcp EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: event-stream-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: EventStream
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $labels := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.labels) }}
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 60 }}{{- $base = printf "%s-%s" ($base | trunc 51 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- /* Each consumer's Google service account, as its workload-identity names it. */}}
+            {{- $member := dict }}
+            {{- range (default (list) $xr.spec.consumers) }}
+            {{- $id := printf "%s%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24) }}
+            {{- $_ := set $member .component (printf "serviceAccount:%s@%s.iam.gserviceaccount.com" $id $env.project) }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $labels "valxel_product" | default "-" | upper) (index $labels "valxel_feature" | default "-" | upper)
+                  (index $labels "valxel_resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $topicPath := printf "projects/%s/topics/%s" $env.project $base }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "topic" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $topicPath }}{{- end }}
+            {{- $retention := printf "%ds" (mul (default 24 $xr.spec.retention_hours) 3600) }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: Topic
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "topic" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                kmsKeyName: {{ $env.kmsKeyName | quote }}
+                messageRetentionDuration: {{ $retention | quote }}
+                messageStoragePolicy:
+                  allowedPersistenceRegions: [{{ $env.region | quote }}]
+                labels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- if has "read" (default (list) .access) }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: Subscription
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name $c.component | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "subscription-%s" $c.component) }}
+                crossplane.io/external-name: {{ printf "%s-%s" $base $c.component | quote }}
+            spec:
+              managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]
+              forProvider:
+                project: {{ $env.project | quote }}
+                topic: {{ $topicPath | quote }}
+                ackDeadlineSeconds: 60
+                enableMessageOrdering: true
+                retainAckedMessages: true
+                messageRetentionDuration: {{ $retention | quote }}
+                expirationPolicy:
+                  ttl: ""
+                labels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- range (default (list) $c.actions) }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: SubscriptionIAMMember
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "read-%s-%s" $c.component (. | sha256sum | trunc 6)) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                subscription: {{ printf "%s-%s" $base $c.component | quote }}
+                role: {{ . | quote }}
+                member: {{ index $member $c.component | quote }}
+            {{- end }}
+            {{- else }}
+            {{- range (default (list) $c.actions) }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: TopicIAMMember
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "write-%s-%s" $c.component (. | sha256sum | trunc 6)) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                topic: {{ $topicPath | quote }}
+                role: {{ . | quote }}
+                member: {{ index $member $c.component | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- /* The catalog's standard alarms for event-stream on Google Cloud (sdlc-governance platform/catalog.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "consumers-behind" "metric" "pubsub.googleapis.com/subscription/oldest_unacked_message_age"
+                        "filter" (printf "resource.type=\"pubsub_subscription\" AND resource.labels.subscription_id=starts_with(\"%s-\")" $base)
+                        "aligner" "ALIGN_MAX" "period" 300 "periods" 3 "above" 300 "severity" "sev2"
+                        "says" "A reader is over five minutes behind; messages it doesn't read before retention ends are lost.") }}
+            {{- if $env.alarmChannel }}
+            {{- range $alarms }}
+            ---
+            apiVersion: monitoring.gcp.m.upbound.io/v1beta1
+            kind: AlertPolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                displayName: {{ printf "%s-%s" $base .name | quote }}
+                combiner: OR
+                severity: {{ ternary "ERROR" "WARNING" (eq .severity "sev2") }}
+                conditions:
+                  - displayName: {{ .name | quote }}
+                    conditionThreshold:
+                      filter: {{ printf "metric.type=\"%s\" AND %s" .metric .filter | quote }}
+                      comparison: COMPARISON_GT
+                      thresholdValue: {{ .above }}
+                      duration: {{ printf "%ds" (mul .period .periods) | quote }}
+                      aggregations:
+                        - alignmentPeriod: {{ printf "%ds" .period | quote }}
+                          perSeriesAligner: {{ .aligner }}
+                documentation:
+                  content: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                  mimeType: text/markdown
+                notificationChannels: [{{ $env.alarmChannel | quote }}]
+                userLabels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: EventStream
+            status:
+              stream: {{ $topicPath | quote }}
+              id: {{ $topicPath | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

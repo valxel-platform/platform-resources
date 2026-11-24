@@ -1,6 +1,6 @@
 # Required check: render. It checks the module against the platform catalog, renders every
-# Composition with Crossplane (first reconcile and after AWS reports), and validates what they
-# compose against the AWS providers' schemas and this module's XRDs.
+# Composition with Crossplane (first reconcile and after the cloud reports), and validates what they
+# compose against the AWS and Google Cloud providers' schemas and this module's XRDs.
 name: ci
 
 on:
@@ -52,9 +52,9 @@ jobs:
               || crossplane render "$xr" "$comp" functions.yaml --xrd "$xrd" \
                 --extra-resources "$settings" "$@"
           }
-          # aws/: every type on AWS (MSK for Kafka). strimzi/: the Kafka types outside production.
-          # k8s/: types made of in-cluster objects (code-runner).
-          for flavour in aws strimzi k8s; do
+          # aws/: every type on AWS (MSK for Kafka). gcp/: every type on Google Cloud but Kafka.
+          # strimzi/: the Kafka types outside AWS production. k8s/: in-cluster objects (code-runner).
+          for flavour in aws gcp strimzi k8s; do
             for dir in $flavour/render/*/; do
               kind=$(basename "$dir")
               settings=$flavour/render/environment-config.yaml
@@ -72,22 +72,27 @@ jobs:
       - name: Validate against the provider and XRD schemas
         run: |
           # One YAML stream: each file's documents, separated.
-          for f in aws/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
+          for f in aws/provider.yaml gcp/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
           # Validate what the Compositions compose. The XRs are this module's own inputs; the
           # tests check them against the XRDs and the catalog.
           python3 - <<'PY'
           import glob, os, yaml
           os.makedirs("composed", exist_ok=True)
           for path in glob.glob("out/*.yaml"):
-              docs = [d for d in yaml.safe_load_all(open(path)) if d and not d.get("apiVersion", "").startswith(("aws.platform.valxel.dev/", "runtime.platform.valxel.dev/"))]
+              docs = [d for d in yaml.safe_load_all(open(path)) if d and not d.get("apiVersion", "").startswith(("aws.platform.valxel.dev/", "platform.valxel.dev/", "runtime.platform.valxel.dev/"))]
               with open(os.path.join("composed", os.path.basename(path)), "w") as f:
                   yaml.safe_dump_all(docs, f, sort_keys=False)
           PY
           # The CLI moved validate under `resource`; older ones have it under `beta`.
+          # A missing schema fails too, but for Cilium's policies (the data plane's CNI, no package).
           if crossplane resource validate --help >/dev/null 2>&1; then
-            crossplane resource validate extensions.yaml composed/ --skip-success-results
+            crossplane resource validate extensions.yaml composed/ --skip-success-results | tee validate.txt
           else
-            crossplane beta validate extensions.yaml composed/ --skip-success-results
+            crossplane beta validate extensions.yaml composed/ --skip-success-results | tee validate.txt
+          fi
+          if grep 'could not find CRD/XRD' validate.txt | grep -v 'Kind=CiliumNetworkPolicy'; then
+            echo "::error::composed objects without a schema (a provider missing from */provider.yaml, or a wrong API group)"
+            exit 1
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}

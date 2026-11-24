@@ -1,0 +1,30 @@
+# A KeyValueTable as OpenChoreo renders it into a cell namespace on a Google Cloud data plane, labels as the SDLC tool writes them, for `crossplane composition render` (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: KeyValueTable
+metadata:
+  name: r-field-state-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  partition_key: field_id
+  sort_key: reading_at
+  ttl_attribute: expires_at
+  indexes:
+  - by-farm:farm_id:reading_at
+  consumers:
+  - component: agtech-field-api
+    access:
+    - read
+    - write
+    actions:
+    - roles/datastore.user
+    - roles/datastore.viewer
+  - component: agtech-field-worker
+    access:
+    - read
+    actions:
+    - roles/datastore.viewer
+  tags:
+    valxel_product: ag
+    valxel_feature: ag-feat-7
+    valxel_data-class: general
+  size: small

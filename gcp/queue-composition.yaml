@@ -1,0 +1,253 @@
+# Builds a Queue as a Pub/Sub topic to send to and one subscription to receive from, with a
+# dead-letter topic (constitution VX-19, catalog type queue on Google Cloud).
+#
+#   Topic                   the dead-letter topic, then the queue's topic; CMEK with the product key
+#   Subscription            the queue's: acknowledgement deadline visibility_timeout_s, ordered when
+#                           fifo, dead-lettering after max_receives; and one on the dead-letter topic
+#                           that keeps what failed for 7 days, for the alarm and for a person
+#   TopicIAMMember          Pub/Sub's service agent may publish dead letters; senders their roles
+#   SubscriptionIAMMember   Pub/Sub's service agent may move messages off; receivers their roles
+#   AlertPolicy             the catalog's alarms: oldest message too old, anything dead-lettered
+#
+# Settings come from the data plane's valxel-gcp EnvironmentConfig.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: queue-gcp
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: Queue
+  mode: Pipeline
+  pipeline:
+    - step: load-settings
+      functionRef:
+        name: function-environment-configs
+      input:
+        apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+        kind: Input
+        spec:
+          environmentConfigs:
+            - type: Reference
+              ref:
+                name: valxel-gcp
+
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $env := index .context "apiextensions.crossplane.io/environment" }}
+            {{- $nsHash := $xr.metadata.namespace | sha256sum | trunc 8 }}
+            {{- $labels := merge (dict) (default (dict) $xr.spec.tags) (default (dict) $env.labels) }}
+            {{- $base := printf "%s%s-%s" $env.namePrefix $xr.metadata.name $nsHash }}
+            {{- $base = regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $base) "-") "-" }}
+            {{- if gt (len $base) 60 }}{{- $base = printf "%s-%s" ($base | trunc 51 | trimSuffix "-") ($base | sha256sum | trunc 8) }}{{- end }}
+            {{- /* Each consumer's Google service account, as its workload-identity names it. */}}
+            {{- $member := dict }}
+            {{- range (default (list) $xr.spec.consumers) }}
+            {{- $id := printf "%s%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24) }}
+            {{- $_ := set $member .component (printf "serviceAccount:%s@%s.iam.gserviceaccount.com" $id $env.project) }}
+            {{- end }}
+            {{- $users := list }}{{- range (default (list) $xr.spec.consumers) }}{{- $users = append $users .component }}{{- end }}
+            {{- $who := printf "valxel product=%s feature=%s resource=%s env=%s consumers=%s"
+                  (index $labels "valxel_product" | default "-" | upper) (index $labels "valxel_feature" | default "-" | upper)
+                  (index $labels "valxel_resource" | default $xr.metadata.name) ($env.environment | default "-")
+                  (join "," $users | default "-") }}
+            {{- $topicPath := printf "projects/%s/topics/%s" $env.project $base }}
+            {{- $subPath := printf "projects/%s/subscriptions/%s" $env.project $base }}
+            {{- $dlq := printf "%s-dlq" $base }}
+            {{- $dlqPath := printf "projects/%s/topics/%s" $env.project $dlq }}
+            {{- $agent := printf "serviceAccount:service-%s@gcp-sa-pubsub.iam.gserviceaccount.com" ($env.projectNumber | toString) }}
+            {{- $ready := false }}
+            {{- with getComposedResource . "subscription" }}{{- $ready = eq (dig "status" "atProvider" "id" "" .) $subPath }}{{- end }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: Topic
+            metadata:
+              name: {{ printf "%s-dlq" $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letters" }}
+                crossplane.io/external-name: {{ $dlq | quote }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                kmsKeyName: {{ $env.kmsKeyName | quote }}
+                messageStoragePolicy:
+                  allowedPersistenceRegions: [{{ $env.region | quote }}]
+                labels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: Subscription
+            metadata:
+              name: {{ printf "%s-dlq" $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letter-subscription" }}
+                crossplane.io/external-name: {{ $dlq | quote }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                topic: {{ $dlqPath | quote }}
+                messageRetentionDuration: "604800s"
+                expirationPolicy:
+                  ttl: ""
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: TopicIAMMember
+            metadata:
+              name: {{ printf "%s-dlq-agent" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "dead-letters-agent" }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                topic: {{ $dlqPath | quote }}
+                role: roles/pubsub.publisher
+                member: {{ $agent | quote }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: Topic
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "topic" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                kmsKeyName: {{ $env.kmsKeyName | quote }}
+                messageStoragePolicy:
+                  allowedPersistenceRegions: [{{ $env.region | quote }}]
+                labels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: Subscription
+            metadata:
+              name: {{ $xr.metadata.name }}
+              annotations:
+                {{ setResourceNameAnnotation "subscription" }}
+                crossplane.io/external-name: {{ $base | quote }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                topic: {{ $topicPath | quote }}
+                ackDeadlineSeconds: {{ max 10 (min 600 (default 60 $xr.spec.visibility_timeout_s)) }}
+                enableMessageOrdering: {{ $xr.spec.fifo }}
+                expirationPolicy:
+                  ttl: ""
+                deadLetterPolicy:
+                  deadLetterTopic: {{ $dlqPath | quote }}
+                  maxDeliveryAttempts: {{ max 5 (min 100 (default 5 $xr.spec.max_receives)) }}
+                retryPolicy:
+                  minimumBackoff: "10s"
+                  maximumBackoff: "600s"
+                labels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: SubscriptionIAMMember
+            metadata:
+              name: {{ printf "%s-agent" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "subscription-agent" }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                subscription: {{ $base | quote }}
+                role: roles/pubsub.subscriber
+                member: {{ $agent | quote }}
+            {{- range $xr.spec.consumers }}
+            {{- $c := . }}
+            {{- $reads := has "read" (default (list) .access) }}
+            {{- range (default (list) .actions) }}
+            ---
+            apiVersion: pubsub.gcp.m.upbound.io/v1beta1
+            kind: {{ ternary "SubscriptionIAMMember" "TopicIAMMember" $reads }}
+            metadata:
+              name: {{ printf "%s-%s-%s" $xr.metadata.name $c.component (. | sha256sum | trunc 6) | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "access-%s-%s" $c.component (. | sha256sum | trunc 6)) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                {{- if $reads }}
+                subscription: {{ $base | quote }}
+                {{- else }}
+                topic: {{ $topicPath | quote }}
+                {{- end }}
+                role: {{ . | quote }}
+                member: {{ index $member $c.component | quote }}
+            {{- end }}
+            {{- end }}
+            {{- /* The catalog's standard alarms for queue on Google Cloud (sdlc-governance platform/catalog.yaml). */}}
+            {{- $alarms := list
+                  (dict "name" "backlog-age" "metric" "pubsub.googleapis.com/subscription/oldest_unacked_message_age"
+                        "filter" (printf "resource.type=\"pubsub_subscription\" AND resource.labels.subscription_id=\"%s\"" $base)
+                        "aligner" "ALIGN_MAX" "period" 300 "periods" 3 "above" 900 "severity" "sev3"
+                        "says" "Messages have waited over 15 minutes: the consumer is slow or down.")
+                  (dict "name" "dead-letters" "metric" "pubsub.googleapis.com/subscription/num_undelivered_messages"
+                        "filter" (printf "resource.type=\"pubsub_subscription\" AND resource.labels.subscription_id=\"%s\"" $dlq)
+                        "aligner" "ALIGN_MAX" "period" 300 "periods" 1 "above" 0 "severity" "sev3"
+                        "says" "Messages failed every retry and are in the dead-letter topic.") }}
+            {{- if $env.alarmChannel }}
+            {{- range $alarms }}
+            ---
+            apiVersion: monitoring.gcp.m.upbound.io/v1beta1
+            kind: AlertPolicy
+            metadata:
+              name: {{ printf "%s-%s" $xr.metadata.name .name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "alarm-%s" .name) }}
+            spec:
+              forProvider:
+                project: {{ $env.project | quote }}
+                displayName: {{ printf "%s-%s" $base .name | quote }}
+                combiner: OR
+                severity: {{ ternary "ERROR" "WARNING" (eq .severity "sev2") }}
+                conditions:
+                  - displayName: {{ .name | quote }}
+                    conditionThreshold:
+                      filter: {{ printf "metric.type=\"%s\" AND %s" .metric .filter | quote }}
+                      comparison: COMPARISON_GT
+                      thresholdValue: {{ .above }}
+                      duration: {{ printf "%ds" (mul .period .periods) | quote }}
+                      aggregations:
+                        - alignmentPeriod: {{ printf "%ds" .period | quote }}
+                          perSeriesAligner: {{ .aligner }}
+                documentation:
+                  content: {{ printf "%s alarm=%s severity=%s\n%s" $who .name .severity .says | quote }}
+                  mimeType: text/markdown
+                notificationChannels: [{{ $env.alarmChannel | quote }}]
+                userLabels:
+                  {{- range $k, $v := $labels }}
+                  {{ $k | quote }}: {{ $v | toString | quote }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $ready }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: Queue
+            status:
+              sendTo: {{ $topicPath | quote }}
+              receiveFrom: {{ $subPath | quote }}
+              id: {{ $topicPath | quote }}
+              deadLetterId: {{ $dlqPath | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

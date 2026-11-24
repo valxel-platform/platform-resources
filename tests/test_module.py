@@ -1,10 +1,16 @@
-"""The module matches the platform catalog (sdlc-governance platform/aws-resources.yaml): every
-type the SDLC can pick has a ClusterResourceType, an XRD and an AWS Composition, with the same
-parameters and outputs, and stored data is never deleted with its binding.
+"""The module matches the platform catalog (sdlc-governance platform/catalog.yaml, version 2): every
+type the SDLC can pick has a ClusterResourceType, an XRD and a Composition for each cloud the
+catalog offers it on, with the same parameters and outputs, the catalog's access, encryption with
+the product key and the catalog's alarms; stored data is never deleted with its binding.
+
+The version 1 AWS types (dynamodb-table, sqs-queue...) stay for the resources made under them: each
+is an alias of its neutral type in the catalog, and scripts/neutral.py writes the neutral type's AWS
+side from it.
 
 The catalog comes from $VALXEL_CATALOG (a path), or from sdlc-governance on GitHub at
 $VALXEL_CATALOG_REF (default main)."""
 
+import importlib.util
 import os
 import re
 import urllib.request
@@ -15,7 +21,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 # Provided by OpenChoreo's provisioner-crossplane module, not here.
-OPENCHOREO_TYPES = {"postgres-crossplane", "redis-crossplane"}
+OPENCHOREO_TYPES = {"postgres", "cache"}
+KAFKA = ("kafka-topic", "kafka-user")
 
 
 def load_catalog() -> dict:
@@ -23,24 +30,45 @@ def load_catalog() -> dict:
     if path:
         return yaml.safe_load(Path(path).read_text())
     ref = os.environ.get("VALXEL_CATALOG_REF", "main")
-    url = f"https://raw.githubusercontent.com/valxel-platform/sdlc-governance/{ref}/platform/aws-resources.yaml"
+    url = f"https://raw.githubusercontent.com/valxel-platform/sdlc-governance/{ref}/platform/catalog.yaml"
     with urllib.request.urlopen(url, timeout=30) as r:  # noqa: S310 - fixed https URL
         return yaml.safe_load(r.read())
 
 
 CATALOG = load_catalog()
+assert CATALOG.get("version") == 2, "this module reads version 2 of the catalog (platform/catalog.yaml)"
 TYPES = sorted(t for t in CATALOG["types"] if t not in OPENCHOREO_TYPES)
+ON = [(k, c) for k in TYPES for c in sorted(CATALOG["types"][k]["clouds"])]
+ALIASES = sorted((a, k) for k in TYPES for a in CATALOG["types"][k].get("aliases") or [])
 
 
 def doc(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
 
 
-@pytest.mark.parametrize("kind", TYPES)
-def test_every_catalog_type_is_built(kind):
-    for f in (f"apis/{kind}/definition.yaml", f"apis/{kind}/resource-type.yaml", f"aws/{kind}-composition.yaml",
-              f"aws/render/{kind}/xr.yaml", f"aws/render/{kind}/observed.yaml"):
-        assert (ROOT / f).is_file(), f"{kind}: {f} is missing"
+def flavour(kind: str, cloud: str) -> str:
+    """The directory of a type's Composition on a cloud: Kafka on Google Cloud is Strimzi."""
+    return "strimzi" if cloud == "gcp" and kind in KAFKA else cloud
+
+
+def block(kind: str, cloud: str) -> dict:
+    return CATALOG["types"][kind]["clouds"][cloud]
+
+
+def outputs(kind: str, cloud: str) -> dict:
+    return block(kind, cloud).get("outputs") or CATALOG["types"][kind].get("outputs") or {}
+
+
+@pytest.mark.parametrize(("kind", "cloud"), ON)
+def test_every_catalog_type_is_built(kind, cloud):
+    f = flavour(kind, cloud)
+    for path in (f"apis/{kind}/definition.yaml", f"apis/{kind}/resource-type.yaml", f"{f}/{kind}-composition.yaml",
+                 f"{f}/render/{kind}/xr.yaml", f"{f}/render/{kind}/observed.yaml"):
+        assert (ROOT / path).is_file(), f"{kind} on {cloud}: {path} is missing"
+    comp = doc(ROOT / f"{f}/{kind}-composition.yaml")
+    xrd = doc(ROOT / f"apis/{kind}/definition.yaml")
+    assert comp["spec"]["compositeTypeRef"] == {"apiVersion": f"{xrd['spec']['group']}/v1alpha1",
+                                                 "kind": xrd["spec"]["names"]["kind"]}
 
 
 @pytest.mark.parametrize("kind", TYPES)
@@ -51,12 +79,36 @@ def test_parameters_and_outputs_match_the_catalog(kind):
     params = rt["spec"]["parameters"]["openAPIV3Schema"]["properties"]
     missing = set(t.get("parameters") or {}) - set(params)
     assert not missing, f"{kind}: the ResourceType lacks catalog parameters {missing}"
-    if t.get("access"):
+    if any(c.get("access") for c in t["clouds"].values()):
         assert {"consumers", "tags"} <= set(params), f"{kind}: needs consumers and tags"
-    assert [o["name"] for o in rt["spec"]["outputs"]] == list(t.get("outputs") or {}), f"{kind}: outputs differ"
+    names = [o["name"] for o in rt["spec"]["outputs"]]
+    for cloud in t["clouds"]:
+        assert names == list(outputs(kind, cloud)), f"{kind}: outputs differ from the catalog's on {cloud}"
     for p, spec in (t.get("parameters") or {}).items():
         if spec.get("required"):
             assert p in rt["spec"]["parameters"]["openAPIV3Schema"].get("required", []), f"{kind}: {p} is required"
+
+
+@pytest.mark.parametrize(("alias", "kind"), ALIASES)
+def test_version_1_types_stay_for_their_resources(alias, kind):
+    """An alias keeps its ClusterResourceType, XRD and AWS Composition, so the resources made under
+    it never change type; its parameters are the neutral type's."""
+    if kind in OPENCHOREO_TYPES:
+        return
+    for path in (f"apis/{alias}/definition.yaml", f"apis/{alias}/resource-type.yaml", f"aws/{alias}-composition.yaml"):
+        assert (ROOT / path).is_file(), f"{alias}: {path} is missing"
+    old = doc(ROOT / f"apis/{alias}/resource-type.yaml")["spec"]["parameters"]["openAPIV3Schema"]["properties"]
+    new = doc(ROOT / f"apis/{kind}/resource-type.yaml")["spec"]["parameters"]["openAPIV3Schema"]["properties"]
+    assert set(old) == set(new), f"{alias} and {kind} take different parameters"
+
+
+def test_the_neutral_types_aws_side_is_what_the_script_writes():
+    spec = importlib.util.spec_from_file_location("neutral", ROOT / "scripts/neutral.py")
+    neutral = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(neutral)
+    for path, text in neutral.files().items():
+        assert path.is_file() and path.read_text() == text, \
+            f"{path.relative_to(ROOT)} differs from its version 1 type: run python3 scripts/neutral.py"
 
 
 @pytest.mark.parametrize("kind", TYPES)
@@ -76,61 +128,74 @@ def test_the_resource_type_renders_its_xrd(kind):
         assert field in status, f"{kind}: output {o['name']} reads status.{field}, which the XRD lacks"
 
 
-@pytest.mark.parametrize("kind", TYPES)
-def test_stored_data_is_never_deleted_with_its_binding(kind):
+@pytest.mark.parametrize(("kind", "cloud"), ON)
+def test_stored_data_is_never_deleted_with_its_binding(kind, cloud):
     rt = doc(ROOT / f"apis/{kind}/resource-type.yaml")
-    comp = (ROOT / f"aws/{kind}-composition.yaml").read_text()
+    comp = (ROOT / f"{flavour(kind, cloud)}/{kind}-composition.yaml").read_text()
     if CATALOG["types"][kind].get("stateful"):
         assert rt["spec"]["retainPolicy"] == "Retain"
-        # Crossplane v2 namespaced resources: no Delete in managementPolicies keeps the AWS resource.
+        # Crossplane v2 namespaced resources: no Delete in managementPolicies keeps the cloud resource.
         assert 'managementPolicies: ["Observe", "Create", "Update", "LateInitialize"]' in comp
-    # Kafka encrypts at rest with the cluster's key (MSK's setting), not per topic; identities hold no data.
-    assert "kmsKeyArn" in comp or kind in ("workload-identity", "kafka-topic", "kafka-user"), \
-        f"{kind}: not encrypted with the product key"
+    # Kafka encrypts at rest with the cluster's key, not per topic; identities hold no data.
+    key = {"aws": "kmsKeyArn", "gcp": "kmsKeyName"}[cloud]
+    assert key in comp or kind in ("workload-identity", *KAFKA), f"{kind} on {cloud}: not encrypted with the product key"
 
 
-@pytest.mark.parametrize("kind", [k for k in TYPES if CATALOG["types"][k].get("access")])
-def test_catalog_actions_belong_to_the_service(kind):
-    prefix = {"dynamodb-table": "dynamodb", "kinesis-stream": "kinesis", "sqs-queue": "sqs", "s3-bucket": "s3",
-              "sns-topic": "sns", "kafka-topic": "kafka-cluster"}[kind]
-    for verb, actions in CATALOG["types"][kind]["access"].items():
-        assert all(a.split(":", 1)[0] == prefix for a in actions), f"{kind}: {verb} grants {actions}"
+@pytest.mark.parametrize(("kind", "cloud"), [(k, c) for k, c in ON if block(k, c).get("access")])
+def test_catalog_access_belongs_to_the_service(kind, cloud):
+    if cloud == "gcp":
+        prefix = {"key-value-table": "roles/datastore.", "event-stream": "roles/pubsub.", "queue": "roles/pubsub.",
+                  "object-bucket": "roles/storage.", "topic": "roles/pubsub."}[kind]
+        ok = lambda a: a.startswith(prefix)  # noqa: E731
+    else:
+        prefix = {"key-value-table": "dynamodb", "event-stream": "kinesis", "queue": "sqs", "object-bucket": "s3",
+                  "topic": "sns", "kafka-topic": "kafka-cluster"}[kind]
+        ok = lambda a: a.split(":", 1)[0] == prefix  # noqa: E731
+    for verb, actions in block(kind, cloud)["access"].items():
+        assert all(ok(a) for a in actions), f"{kind} on {cloud}: {verb} grants {actions}"
+    pattern = doc(ROOT / f"apis/{kind}/definition.yaml")["spec"]["versions"][0]["schema"]["openAPIV3Schema"][
+        "properties"]["spec"]["properties"]["consumers"]["items"]["properties"]["actions"]["items"]["pattern"]
+    assert all(re.match(pattern, a) for actions in block(kind, cloud)["access"].values() for a in actions)
 
 
 ALARM = re.compile(r'\(dict "name" "(?P<name>[^"]+)"(?P<rest>.*?)"says" "(?P<says>(?:[^"\\]|\\.)*)"\)', re.S)
 
 
-def composed_alarms(kind: str) -> dict[str, dict]:
+def composed_alarms(path: str) -> dict[str, dict]:
     """The alarms a Composition builds: its $alarms list, field by field."""
     out = {}
-    for m in ALARM.finditer((ROOT / f"aws/{kind}-composition.yaml").read_text()):
+    for m in ALARM.finditer((ROOT / path).read_text()):
         fields = dict(re.findall(r'"(\w+)" ("[^"]*"|\d+|\([^)]*\))', m.group("rest")))
         out[m.group("name")] = {k: v.strip('"') for k, v in fields.items()} | {"says": m.group("says").replace('\\"', '"')}
     return out
 
 
-@pytest.mark.parametrize("kind", TYPES)
-def test_every_resource_gets_its_catalog_alarms(kind):
-    t = CATALOG["types"][kind]
-    want = t.get("alarms") or {}
-    got = composed_alarms(kind)
-    assert set(got) == set(want), f"{kind}: alarms {sorted(got)} built, the catalog has {sorted(want)}"
+@pytest.mark.parametrize(("kind", "cloud"), ON)
+def test_every_resource_gets_its_catalog_alarms(kind, cloud):
+    b = block(kind, cloud)
+    want = b.get("alarms") or {}
+    path = f"{flavour(kind, cloud)}/{kind}-composition.yaml"
+    got = composed_alarms(path)
+    assert set(got) == set(want), f"{kind} on {cloud}: alarms {sorted(got)} built, the catalog has {sorted(want)}"
+    comp = (ROOT / path).read_text()
     for name, a in want.items():
         g = got[name]
-        assert g["namespace"] == t["cloudwatch_namespace"] and g["metric"] == a["metric"], f"{kind}/{name}: metric"
-        assert (g["statistic"], int(g["period"]), int(g["periods"]), float(g["above"]), g["severity"], g["says"]) == (
-            a["statistic"], a["period_s"], a["periods"], float(a["above"]), a["severity"], a["says"]), f"{kind}/{name}"
-        assert g["dimensions"].startswith("(dict "), f"{kind}/{name}: alarms need the resource's dimensions"
-    comp = (ROOT / f"aws/{kind}-composition.yaml").read_text()
+        assert g["metric"] == a["metric"], f"{kind}/{name}: metric"
+        assert (int(g["period"]), int(g["periods"]), float(g["above"]), g["severity"], g["says"]) == (
+            a["period_s"], a["periods"], float(a["above"]), a["severity"], a["says"]), f"{kind}/{name} on {cloud}"
+        if cloud == "aws":
+            assert g["namespace"] == b["cloudwatch_namespace"] and g["statistic"] == a["statistic"], f"{kind}/{name}"
+            assert g["dimensions"].startswith("(dict "), f"{kind}/{name}: alarms need the resource's dimensions"
+        else:
+            assert g["aligner"] == a["aligner"], f"{kind}/{name}: aligner"
+            assert "filter" in g, f"{kind}/{name}: alert policies need the resource's filter"
+    # Saying whose they are, which the SDLC tool reads: on AWS named with the data plane's prefix,
+    # which AlarmRouting's EventBridge rule matches; on Google Cloud sent to AlarmRouting's channel.
     if want:
-        # Named with the data plane's prefix, which AlarmRouting's EventBridge rule matches, and
-        # saying whose they are on the first line of the description, which the SDLC tool reads.
-        assert "$alarmBase" in comp and "valxel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
+        assert "valxel product=%s feature=%s resource=%s env=%s consumers=%s" in comp
+        assert "$alarmBase" in comp if cloud == "aws" else "$env.alarmChannel" in comp
     else:
-        assert "kind: MetricAlarm" not in comp
-
-
-KAFKA = ("kafka-topic", "kafka-user")
+        assert "kind: MetricAlarm" not in comp and "kind: AlertPolicy" not in comp
 
 
 @pytest.mark.parametrize("kind", KAFKA)
@@ -170,3 +235,25 @@ def test_alarm_routing_sends_the_prefixed_alarms_to_the_tool():
         assert (ROOT / f).is_file()
     providers = (ROOT / "aws/provider.yaml").read_text()
     assert "provider-aws-cloudwatchevents:" in providers
+
+
+def test_alarm_routing_on_google_cloud_sends_to_the_tool():
+    comp = (ROOT / "gcp/alarm-routing-composition.yaml").read_text()
+    assert "type: webhook_basicauth" in comp and '"/signals/cloud-monitoring"' in comp and "passwordSecretRef" in comp
+    for f in ("gcp/render/alarm-routing/xr.yaml", "gcp/render/alarm-routing/observed.yaml"):
+        assert (ROOT / f).is_file()
+    xrd = doc(ROOT / "apis/alarm-routing/definition.yaml")
+    assert "channel" in xrd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"]["properties"]
+    providers = (ROOT / "gcp/provider.yaml").read_text()
+    assert "provider-gcp-monitoring:" in providers
+
+
+def test_google_cloud_access_goes_to_each_component_s_own_service_account():
+    """Every gcp/ Composition grants to the account workload-identity makes for the component."""
+    wi = (ROOT / "gcp/workload-identity-composition.yaml").read_text()
+    account = 'printf "%s/%s" $xr.metadata.namespace $xr.spec.component | sha256sum | trunc 24'
+    assert account in wi and "roles/iam.workloadIdentityUser" in wi and ".svc.id.goog[%s/%s]" in wi
+    for kind in ("key-value-table", "event-stream", "queue", "object-bucket", "topic"):
+        comp = (ROOT / f"gcp/{kind}-composition.yaml").read_text()
+        assert 'printf "%s/%s" $xr.metadata.namespace .component | sha256sum | trunc 24' in comp, kind
+        assert "index $member $c.component" in comp, kind

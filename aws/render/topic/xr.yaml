@@ -1,0 +1,21 @@
+# Written by scripts/neutral.py from aws/render/sns-topic/xr.yaml: change that file and run the script, not this one.
+# A SnsTopic as OpenChoreo renders it into a cell namespace, for `crossplane composition render`
+# (see README, Checking a Composition).
+apiVersion: platform.valxel.dev/v1alpha1
+kind: Topic
+metadata:
+  name: r-alerts-development-1a2b3c4d
+  namespace: dp-default-agtech-development-5f6e7d8c
+spec:
+  fifo: false
+  consumers:
+  - component: agtech-field-api
+    access:
+    - write
+    actions:
+    - sns:Publish
+  tags:
+    valxel:product: AG
+    valxel:feature: AG-FEAT-7
+    valxel:data-class: general
+  size: small
