@@ -129,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     apply(ctx, comps + load(HERE / "workload-identity-composition.yaml"))
 
     if a.openchoreo:
+        apply(ctx, load(ROOT / "cluster-agent-rbac.yaml"))  # OpenChoreo's agent applies what types render
         apply(ctx, resource_types(comps))
         apply(ctx, load(HERE / "component-trait.yaml"))
         apply(ctx, with_local_aws(json.loads(run(["kubectl", "--context", ctx, "get", "clustercomponenttypes",

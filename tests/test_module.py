@@ -294,3 +294,17 @@ def test_azure_access_goes_to_each_component_s_own_identity():
     routing = (ROOT / "azure/alarm-routing-composition.yaml").read_text()
     assert "useCommonAlertSchema: true" in routing and '"/signals/azure-monitor"' in routing
     assert "provider-azure-insights:" in (ROOT / "azure/provider.yaml").read_text()
+
+
+def test_openchoreos_agent_may_manage_every_group_the_resource_types_render():
+    """The data-plane agent applies what a ClusterResourceType renders; a group missing here is
+    refused when bound (platform.valxel.dev was, after the neutral rename: found by agentic-sdlc's
+    laptop-aws workflow)."""
+    rendered = set()
+    for f in (ROOT / "apis").glob("*/resource-type.yaml"):
+        for d in yaml.safe_load_all(f.read_text()):
+            for r in (d or {}).get("spec", {}).get("resources") or []:
+                rendered.add(r["template"]["apiVersion"].split("/")[0])
+    rbac = [d for d in yaml.safe_load_all((ROOT / "cluster-agent-rbac.yaml").read_text()) if d["kind"] == "ClusterRole"]
+    allowed = {g for rule in rbac[0]["rules"] for g in rule["apiGroups"]}
+    assert rendered and rendered <= allowed, rendered - allowed
