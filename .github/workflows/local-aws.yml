@@ -22,6 +22,7 @@ concurrency:
 
 env:
   K3D_VERSION: v5.8.3
+  K3D_SHA256: dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e  # k3d-linux-amd64, the release's checksums.txt
   MOTO_IMAGE: motoserver/moto:5.2.6
 
 jobs:
@@ -34,8 +35,9 @@ jobs:
           persist-credentials: false
       - name: Install k3d
         run: |
-          curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG="$K3D_VERSION" bash
-          k3d version
+          curl -sSfL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/k3d-linux-amd64"
+          echo "$K3D_SHA256  /tmp/k3d" | sha256sum -c -
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d && k3d version
       - name: Start moto and a cluster
         run: |
           docker run -d --name valxel-moto "$MOTO_IMAGE"
