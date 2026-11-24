@@ -169,6 +169,27 @@ On the control plane, once: `apis/*/resource-type.yaml`.
 component. If OpenChoreo names it differently, set `service_account` on the workload identity
 (the SDLC tool would then pass it).
 
+## Local AWS (moto)
+
+`local/aws` runs the AWS catalog with no AWS account: the providers send every call to
+[moto](https://github.com/getmoto/moto), a local AWS emulator, running as a Docker container beside a
+k3d cluster. It is how developers run the SDLC tool, OpenChoreo and Crossplane together on one
+machine (`valxel dev cluster up --aws` in agentic-sdlc), and what the `local-aws` workflow checks on
+every change to `aws/` or `apis/`.
+
+```sh
+docker run -d --name valxel-moto motoserver/moto:5.2.6
+python3 local/aws/install.py --context k3d-<cluster> --crossplane   # --resource-types beside OpenChoreo
+local/aws/e2e/check.sh k3d-<cluster>                                # a feature's resources, end to end
+```
+
+What differs from AWS:
+- Workload identity makes the IAM role without the EKS Pod Identity association. Moto has no EKS
+  Pod Identity, and k3d isn't EKS.
+- Kafka topics and users aren't installed: there is no local MSK.
+- Moto accepts any credentials and evaluates no IAM policy, Object Lock or KMS key policy. Passing
+  here shows the Compositions and providers work end to end, not that the access they grant is right.
+
 ## Checking a Composition
 
 CI renders every Composition twice, before and after AWS reports, then validates the result

@@ -1,0 +1,28 @@
+# Moto runs beside the cluster as a Docker container on the cluster's network (install.py connects
+# it), not in the cluster. This Service gives it a name inside the cluster; install.py fills in the
+# container's address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: moto
+  namespace: crossplane-system
+spec:
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: moto
+  namespace: crossplane-system
+  labels:
+    kubernetes.io/service-name: moto
+addressType: IPv4
+ports:
+  - name: http
+    port: 5000
+    protocol: TCP
+endpoints:
+  - addresses: ["${MOTO_IP}"]

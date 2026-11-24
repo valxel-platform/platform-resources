@@ -1,0 +1,19 @@
+# The local data plane's settings (aws/environment-config.yaml, for moto). Moto's account is
+# 123456789012; seed.py makes the KMS key's alias and the permissions boundary these name.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-aws
+data:
+  accountId: "123456789012"
+  region: us-east-1
+  clusterName: valxel-local
+  environment: development
+  namePrefix: vx-
+  kmsKeyArn: arn:aws:kms:us-east-1:123456789012:alias/valxel-local
+  permissionsBoundaryArn: arn:aws:iam::123456789012:policy/valxel-workload-boundary
+  alarmTopicArn: ""
+  accessLogBucket: ""
+  tags:
+    valxel:managed-by: crossplane
+    valxel:env: local
