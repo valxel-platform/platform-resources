@@ -20,7 +20,7 @@ env:
   # Pin a Crossplane CLI release here once you have one you trust; "current" is the latest stable.
   CROSSPLANE_VERSION: current
   # The catalog's sdlc-governance ref; a catalog change merges there first.
-  VALXEL_CATALOG_REF: b78f44d562f505340a3dd921c36a9bddf6c10513  # sdlc-governance#38; back to main once it merges
+  VALXEL_CATALOG_REF: main
 
 jobs:
   render:
