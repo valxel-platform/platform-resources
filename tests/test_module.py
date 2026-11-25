@@ -21,6 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 KAFKA = ("kafka-topic", "kafka-user")
+SQL = ("postgres-login",)  # built inside the database with provider-sql: one Composition for every cloud
 
 
 def load_catalog() -> dict:
@@ -57,7 +58,10 @@ def doc(path: Path) -> dict:
 
 
 def flavour(kind: str, cloud: str) -> str:
-    """The directory of a type's Composition on a cloud: Kafka on Google Cloud and Azure is Strimzi."""
+    """The directory of a type's Composition on a cloud: Kafka on Google Cloud and Azure is Strimzi;
+    a login inside a database is sql/ everywhere."""
+    if kind in SQL:
+        return "sql"
     return "strimzi" if cloud in ("gcp", "azure") and kind in KAFKA else cloud
 
 
@@ -126,7 +130,8 @@ def test_the_resource_type_renders_its_xrd(kind):
     xrd = doc(ROOT / f"apis/{kind}/definition.yaml")
     spec = xrd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
     params = rt["spec"]["parameters"]["openAPIV3Schema"]["properties"]
-    assert set(spec) == set(params) | {"size"}, f"{kind}: XRD spec and ResourceType parameters differ"
+    sized = {"size"} if "size" in spec else set()  # a login has no sizes
+    assert set(spec) == set(params) | sized, f"{kind}: XRD spec and ResourceType parameters differ"
     template = rt["spec"]["resources"][0]["template"]
     assert template["kind"] == xrd["spec"]["names"]["kind"]
     assert template["apiVersion"] == f"{xrd['spec']['group']}/v1alpha1"
@@ -149,9 +154,10 @@ def test_stored_data_is_never_deleted_with_its_binding(kind, cloud):
     # Kafka encrypts at rest with the cluster's key, not per topic; identities hold no data. On Azure,
     # Event Hubs and Service Bus Standard take no customer-managed key (the catalog says so).
     key = {"aws": "kmsKeyArn", "gcp": "kmsKeyName", "azure": "keyVaultKeyId"}[cloud]
-    exempt = ("workload-identity", *KAFKA) + (("event-stream", "queue", "topic") if cloud == "azure" else ())
+    exempt = ("workload-identity", *KAFKA, *SQL) + (("event-stream", "queue", "topic") if cloud == "azure" else ())
     if kind in exempt and cloud == "azure":
-        assert "Microsoft-managed" in str(block(kind, cloud).get("built_in")) or kind in ("workload-identity", *KAFKA)
+        assert "Microsoft-managed" in str(block(kind, cloud).get("built_in")) or kind in ("workload-identity", *KAFKA,
+                                                                                           *SQL)
     assert key in comp or kind in exempt, f"{kind} on {cloud}: not encrypted with the product key"
 
 
@@ -308,3 +314,39 @@ def test_openchoreos_agent_may_manage_every_group_the_resource_types_render():
     rbac = [d for d in yaml.safe_load_all((ROOT / "cluster-agent-rbac.yaml").read_text()) if d["kind"] == "ClusterRole"]
     allowed = {g for rule in rbac[0]["rules"] for g in rule["apiGroups"]}
     assert rendered and rendered <= allowed, rendered - allowed
+
+
+LOGIN = ROOT / "sql/postgres-login-composition.yaml"
+
+
+def test_a_login_gets_only_what_its_design_approves():
+    text = LOGIN.read_text()
+    # A plain login: none of the role privileges that reach past its grants.
+    for p in ("superUser", "createDb", "createRole", "replication", "bypassRls"):
+        assert f"{p}: false" in text, p
+    # Reads are SELECT on the columns the XR lists, USAGE on their schemas; CREATE only when asked.
+    assert "tables: [{{ .table | quote }}]" in text and "columns:" in text and "privileges: [SELECT]" in text
+    assert "privileges: [USAGE]" in text
+    assert "privileges: [CONNECT{{ if $xr.spec.createSchemas }}, CREATE{{ end }}]" in text
+    assert "ALL" not in text and "INSERT" not in text and "UPDATE" not in text
+    # The admin credentials only ever reach provider-sql, through its ProviderConfig.
+    assert text.count("$admin.name") == 1 and "connectionSecretRef:" in text
+
+
+def test_a_logins_secrets_are_made_once_and_only_referenced():
+    text = LOGIN.read_text()
+    assert '{{- with getComposedResource . "key" }}{{- $key = dig "data" "tokenize_key" $key . }}' in text
+    rt = doc(ROOT / "apis/postgres-login/resource-type.yaml")
+    outputs = {o["name"]: o for o in rt["spec"]["outputs"]}
+    for name in ("host", "port", "username", "password", "tokenize_key"):
+        assert "secretKeyRef" in outputs[name], name  # never a value in a status
+    assert rt["spec"]["retainPolicy"] == "Delete"
+
+
+def test_the_databases_admin_secret_has_what_provider_sql_signs_in_with():
+    for cloud in ("gcp", "azure"):
+        text = (ROOT / f"{cloud}/postgres-composition.yaml").read_text()
+        for key in ("password:", 'username: {{ "app" | b64enc }}', 'port: {{ "5432" | b64enc }}',
+                    "endpoint: {{ $host | b64enc }}"):
+            assert key in text, (cloud, key)
+        assert "autoGeneratePassword" not in text  # one password, made once by the Composition

@@ -1,0 +1,95 @@
+# The PostgresLogin API: a login of its own in a product database, for one component (catalog type
+# postgres-login). Not chosen in designs: the SDLC tool makes one for each transform, from the
+# approved design: the tables and columns it may read come from the data contracts. The
+# postgres-login ClusterResourceType creates one in the cell namespace of each environment it is
+# bound to; sql/postgres-login-composition.yaml builds it with provider-sql on every cloud.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: postgreslogins.platform.valxel.dev
+spec:
+  scope: Namespaced
+  group: platform.valxel.dev
+  names:
+    kind: PostgresLogin
+    plural: postgreslogins
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [database, login, adminSecret]
+              properties:
+                database:
+                  type: string
+                  description: The database the login signs in to (the postgres resource's database).
+                  pattern: "^[a-z][a-z0-9_]{0,62}$"
+                login:
+                  type: string
+                  description: The role's name in the database. Never changes.
+                  pattern: "^[a-z][a-z0-9_]{0,50}$"
+                adminSecret:
+                  type: object
+                  description: >-
+                    The database's admin connection Secret in this namespace, and the keys that hold
+                    its host, port, user and password (the catalog says which, per cloud). Only
+                    provider-sql reads it; the component never sees it.
+                  required: [name]
+                  properties:
+                    name: {type: string, pattern: "^[a-z0-9][a-z0-9.-]{0,252}$"}
+                    endpointKey: {type: string, default: endpoint}
+                    portKey: {type: string, default: port}
+                    usernameKey: {type: string, default: username}
+                    passwordKey: {type: string, default: password}
+                reads:
+                  type: array
+                  description: >-
+                    What the login may read: SELECT on these columns of these tables, and USAGE on
+                    their schemas. Nothing else in the database is readable to it.
+                  default: []
+                  items:
+                    type: object
+                    required: [schema, table, columns]
+                    properties:
+                      schema: {type: string, pattern: "^[a-z_][a-z0-9_]{0,62}$"}
+                      table: {type: string, pattern: "^[a-z_][a-z0-9_]{0,62}$"}
+                      columns:
+                        type: array
+                        minItems: 1
+                        items: {type: string, pattern: "^[a-z_][a-z0-9_]{0,62}$"}
+                createSchemas:
+                  type: boolean
+                  description: CREATE on the database, for schemas of its own (a transform's build and published schemas).
+                  default: false
+                breakGlass:
+                  type: boolean
+                  description: >-
+                    A NOLOGIN role <login>_break_glass that the login administers, so it can grant time-boxed
+                    write access to its own objects to a person, and revoke it.
+                  default: false
+                sslMode:
+                  type: string
+                  description: How provider-sql's connection checks TLS.
+                  enum: [require, verify-ca, verify-full]
+                  default: require
+                tags:
+                  type: object
+                  description: Labels (product, feature, component).
+                  default: {}
+                  additionalProperties: {type: string}
+            status:
+              type: object
+              properties:
+                database:
+                  type: string
+                secret:
+                  type: string
+                  description: The Secret with the login's endpoint, port, username and password.
+                tokenizeSecret:
+                  type: string
+                  description: The Secret with a key of the component's own (tokenize_key), made once and kept.

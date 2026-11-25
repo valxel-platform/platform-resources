@@ -1,0 +1,17 @@
+# A transform's login, as the SDLC tool writes it from the design: it reads three columns of
+# reporting's notes, makes its own schemas, and administers its break-glass role.
+apiVersion: platform.valxel.dev/v1alpha1
+kind: PostgresLogin
+metadata:
+  name: emr-transform-login
+  namespace: dp-acme-emr-staging-x7k2
+spec:
+  database: emr
+  login: emr_transform
+  adminSecret: { name: emr-db-postgres }
+  reads:
+    - { schema: public, table: notes, columns: [note_id, patient_id, signed_at, clinic_id, _updated_at] }
+  createSchemas: true
+  breakGlass: true
+  sslMode: require
+  tags: { valxel_product: emr, valxel_component: emr-transform }

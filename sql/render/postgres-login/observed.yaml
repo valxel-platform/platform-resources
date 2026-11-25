@@ -1,0 +1,28 @@
+# After provider-sql made the role: it's Ready, and the key Secret holds its key (kept, not remade).
+apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+kind: Role
+metadata:
+  name: emr-transform-login-role
+  namespace: dp-acme-emr-staging-x7k2
+  annotations:
+    crossplane.io/composition-resource-name: login
+    crossplane.io/external-name: emr_transform
+spec:
+  forProvider:
+    privileges: { login: true }
+  providerConfigRef: { kind: ProviderConfig, name: emr-transform-login-admin }
+status:
+  conditions:
+    - { type: Ready, status: "True", reason: Available }
+    - { type: Synced, status: "True", reason: ReconcileSuccess }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: emr-transform-login-key
+  namespace: dp-acme-emr-staging-x7k2
+  annotations:
+    crossplane.io/composition-resource-name: key
+type: Opaque
+data:
+  tokenize_key: a2VwdC1mcm9tLWJlZm9yZS1rZXB0LWZyb20tYmVmb3JlLWtlcHQtZnJvbS1iZWY=

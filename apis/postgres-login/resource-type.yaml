@@ -1,0 +1,111 @@
+# A login of its own in a product database, as an OpenChoreo ClusterResourceType (catalog type
+# postgres-login). Not chosen in designs: the SDLC tool makes one per transform from the approved
+# design (what it may read comes from the data contracts) and binds it with the component. It
+# renders one PostgresLogin into the cell namespace; sql/postgres-login-composition.yaml builds it
+# with provider-sql. The component gets every output by reference to a Secret: the login's endpoint,
+# port, username and password (written by provider-sql) and its tokenize key (made once). The
+# database's admin credentials stay with provider-sql.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: postgres-login
+  annotations:
+    openchoreo.dev/description: >-
+      A login in a product database with exactly the grants its design approves, made by the Valxel
+      platform's Crossplane Composition (provider-sql).
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [database, login, adminSecret]
+      properties:
+        database:
+          type: string
+          description: The database the login signs in to.
+          pattern: "^[a-z][a-z0-9_]{0,62}$"
+        login:
+          type: string
+          description: The role's name in the database. Never changes.
+          pattern: "^[a-z][a-z0-9_]{0,50}$"
+        adminSecret:
+          type: object
+          description: The database's admin connection Secret and its keys (the catalog's, per cloud).
+          required: [name]
+          properties:
+            name: {type: string}
+            endpointKey: {type: string, default: endpoint}
+            portKey: {type: string, default: port}
+            usernameKey: {type: string, default: username}
+            passwordKey: {type: string, default: password}
+        reads:
+          type: array
+          description: SELECT on these columns of these tables (written by the SDLC tool from the data contracts).
+          default: []
+          items:
+            type: object
+            required: [schema, table, columns]
+            properties:
+              schema: {type: string}
+              table: {type: string}
+              columns: {type: array, items: {type: string}}
+        createSchemas:
+          type: boolean
+          default: false
+        breakGlass:
+          type: boolean
+          default: false
+        sslMode:
+          type: string
+          enum: [require, verify-ca, verify-full]
+          default: require
+        tags:
+          type: object
+          default: {}
+          additionalProperties: {type: string}
+
+  # A login holds no data: unbinding it drops the role.
+  retainPolicy: Delete
+
+  outputs:
+    - name: host
+      secretKeyRef:
+        name: ${applied.instance.status.secret}
+        key: endpoint
+    - name: port
+      secretKeyRef:
+        name: ${applied.instance.status.secret}
+        key: port
+    - name: database
+      value: ${applied.instance.status.database}
+    - name: username
+      secretKeyRef:
+        name: ${applied.instance.status.secret}
+        key: username
+    - name: password
+      secretKeyRef:
+        name: ${applied.instance.status.secret}
+        key: password
+    - name: tokenize_key
+      secretKeyRef:
+        name: ${applied.instance.status.tokenizeSecret}
+        key: tokenize_key
+
+  resources:
+    - id: instance
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.secret)}"
+      template:
+        apiVersion: platform.valxel.dev/v1alpha1
+        kind: PostgresLogin
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          database: ${parameters.database}
+          login: ${parameters.login}
+          adminSecret: ${parameters.adminSecret}
+          reads: ${parameters.reads}
+          createSchemas: ${parameters.createSchemas}
+          breakGlass: ${parameters.breakGlass}
+          sslMode: ${parameters.sslMode}
+          tags: ${parameters.tags}

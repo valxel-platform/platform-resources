@@ -2,7 +2,9 @@
 # catalog type postgres on Google Cloud; on AWS the type is OpenChoreo's postgres-crossplane).
 #
 #   Secret              <name>-postgres in the cell namespace: the user's password, made once
-#                       (random) and kept; never in the resource's status or the instance's spec
+#                       (random) and kept, never in the resource's status or the instance's spec;
+#                       with the endpoint, port and username, the admin connection a postgres-login
+#                       signs in with (provider-sql)
 #   DatabaseInstance    Enterprise edition, private IP only on the data plane's network (which has
 #                       private services access), TLS required, CMEK with the product key,
 #                       backups with point-in-time recovery, deletion protection, max_connections
@@ -91,6 +93,9 @@ spec:
             type: Opaque
             data:
               password: {{ $password }}
+              username: {{ "app" | b64enc }}
+              port: {{ "5432" | b64enc }}
+              endpoint: {{ $host | b64enc }}
             ---
             apiVersion: sql.gcp.m.upbound.io/v1beta1
             kind: DatabaseInstance
