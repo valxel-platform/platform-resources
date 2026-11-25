@@ -1,6 +1,8 @@
 # Builds a PostgresDatabase as a Cloud SQL for PostgreSQL instance of its own (constitution VX-19,
 # catalog type postgres on Google Cloud; on AWS the type is OpenChoreo's postgres-crossplane).
 #
+#   ProviderConfig      <database>-sql-admin (provider-sql): how the product's logins
+#                       (postgres-login) are made in this database, from the Secret below
 #   Secret              <name>-postgres in the cell namespace: the user's password, made once
 #                       (random) and kept, never in the resource's status or the instance's spec;
 #                       with the endpoint, port and username, the admin connection a postgres-login
@@ -96,6 +98,23 @@ spec:
               username: {{ "app" | b64enc }}
               port: {{ "5432" | b64enc }}
               endpoint: {{ $host | b64enc }}
+            ---
+            {{- /* How provider-sql signs in to this database, for the product's logins (postgres-login):
+                   named after the database, so a login needs only the database's name. The admin
+                   credentials stay in this namespace's Secret; only the provider reads them. */}}
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: ProviderConfig
+            metadata:
+              name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-") | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "sql-admin" }}
+            spec:
+              defaultDatabase: {{ $xr.spec.database | quote }}
+              sslMode: require
+              credentials:
+                source: PostgreSQLConnectionSecret
+                connectionSecretRef:
+                  name: {{ $secret }}
             ---
             apiVersion: sql.gcp.m.upbound.io/v1beta1
             kind: DatabaseInstance

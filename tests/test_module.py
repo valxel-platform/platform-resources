@@ -329,8 +329,9 @@ def test_a_login_gets_only_what_its_design_approves():
     assert "privileges: [USAGE]" in text
     assert "privileges: [CONNECT{{ if $xr.spec.createSchemas }}, CREATE{{ end }}]" in text
     assert "ALL" not in text and "INSERT" not in text and "UPDATE" not in text
-    # The admin credentials only ever reach provider-sql, through its ProviderConfig.
-    assert text.count("$admin.name") == 1 and "connectionSecretRef:" in text
+    # No admin credentials here: the login signs in through the database's own ProviderConfig.
+    assert "connectionSecretRef" not in text and "\n            kind: ProviderConfig\n" not in text
+    assert '$pc := printf "%s-sql-admin" ($xr.spec.database | replace "_" "-")' in text
 
 
 def test_a_logins_secrets_are_made_once_and_only_referenced():
@@ -343,9 +344,11 @@ def test_a_logins_secrets_are_made_once_and_only_referenced():
     assert rt["spec"]["retainPolicy"] == "Delete"
 
 
-def test_the_databases_admin_secret_has_what_provider_sql_signs_in_with():
+def test_a_database_gives_provider_sql_its_admin_secret_under_the_name_logins_use():
     for cloud in ("gcp", "azure"):
         text = (ROOT / f"{cloud}/postgres-composition.yaml").read_text()
+        assert 'name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-")' in text
+        assert "connectionSecretRef:\n                  name: {{ $secret }}" in text
         for key in ("password:", 'username: {{ "app" | b64enc }}', 'port: {{ "5432" | b64enc }}',
                     "endpoint: {{ $host | b64enc }}"):
             assert key in text, (cloud, key)

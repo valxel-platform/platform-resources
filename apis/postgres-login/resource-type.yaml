@@ -17,7 +17,7 @@ spec:
   parameters:
     openAPIV3Schema:
       type: object
-      required: [database, login, adminSecret]
+      required: [database, login]
       properties:
         database:
           type: string
@@ -27,16 +27,6 @@ spec:
           type: string
           description: The role's name in the database. Never changes.
           pattern: "^[a-z][a-z0-9_]{0,50}$"
-        adminSecret:
-          type: object
-          description: The database's admin connection Secret and its keys (the catalog's, per cloud).
-          required: [name]
-          properties:
-            name: {type: string}
-            endpointKey: {type: string, default: endpoint}
-            portKey: {type: string, default: port}
-            usernameKey: {type: string, default: username}
-            passwordKey: {type: string, default: password}
         reads:
           type: array
           description: SELECT on these columns of these tables (written by the SDLC tool from the data contracts).
@@ -54,10 +44,6 @@ spec:
         breakGlass:
           type: boolean
           default: false
-        sslMode:
-          type: string
-          enum: [require, verify-ca, verify-full]
-          default: require
         tags:
           type: object
           default: {}
@@ -103,9 +89,7 @@ spec:
         spec:
           database: ${parameters.database}
           login: ${parameters.login}
-          adminSecret: ${parameters.adminSecret}
           reads: ${parameters.reads}
           createSchemas: ${parameters.createSchemas}
           breakGlass: ${parameters.breakGlass}
-          sslMode: ${parameters.sslMode}
           tags: ${parameters.tags}

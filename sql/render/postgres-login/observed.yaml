@@ -10,7 +10,7 @@ metadata:
 spec:
   forProvider:
     privileges: { login: true }
-  providerConfigRef: { kind: ProviderConfig, name: emr-transform-login-admin }
+  providerConfigRef: { kind: ProviderConfig, name: emr-sql-admin }
 status:
   conditions:
     - { type: Ready, status: "True", reason: Available }

@@ -91,6 +91,23 @@ spec:
               port: {{ "5432" | b64enc }}
               endpoint: {{ $host | b64enc }}
             ---
+            {{- /* How provider-sql signs in to this database, for the product's logins (postgres-login):
+                   named after the database, so a login needs only the database's name. The admin
+                   credentials stay in this namespace's Secret; only the provider reads them. */}}
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: ProviderConfig
+            metadata:
+              name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-") | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "sql-admin" }}
+            spec:
+              defaultDatabase: {{ $xr.spec.database | quote }}
+              sslMode: require
+              credentials:
+                source: PostgreSQLConnectionSecret
+                connectionSecretRef:
+                  name: {{ $secret }}
+            ---
             apiVersion: dbforpostgresql.azure.m.upbound.io/v1beta1
             kind: FlexibleServer
             metadata:

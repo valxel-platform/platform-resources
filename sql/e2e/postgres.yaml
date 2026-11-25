@@ -1,6 +1,7 @@
-# A product database for the postgres-login end-to-end check: Postgres 17 with TLS (the login's
-# provider connects with sslMode require), and its admin Secret with the keys the catalog names
-# for the managed databases (endpoint, port, username, password). Synthetic; test only.
+# A product database for the postgres-login end-to-end check: Postgres 17 with TLS, and what the
+# gcp/ and azure/ postgres Compositions make beside a database: its admin Secret (endpoint, port,
+# username, password) and the ProviderConfig <database>-sql-admin that provider-sql signs in with
+# (sslMode require). Synthetic; test only.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -17,6 +18,19 @@ stringData:
   port: "5432"
   username: app
   password: admin-only-e2e-password
+---
+apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: emr-sql-admin
+  namespace: e2e-sql
+spec:
+  defaultDatabase: emr
+  sslMode: require
+  credentials:
+    source: PostgreSQLConnectionSecret
+    connectionSecretRef:
+      name: emr-db-postgres
 ---
 apiVersion: apps/v1
 kind: Deployment

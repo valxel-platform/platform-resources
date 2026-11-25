@@ -23,29 +23,18 @@ spec:
           properties:
             spec:
               type: object
-              required: [database, login, adminSecret]
+              required: [database, login]
               properties:
                 database:
                   type: string
-                  description: The database the login signs in to (the postgres resource's database).
+                  description: >-
+                    The database the login is made in (the postgres resource's database). Its
+                    Composition provides the ProviderConfig <database>-sql-admin in this namespace.
                   pattern: "^[a-z][a-z0-9_]{0,62}$"
                 login:
                   type: string
                   description: The role's name in the database. Never changes.
                   pattern: "^[a-z][a-z0-9_]{0,50}$"
-                adminSecret:
-                  type: object
-                  description: >-
-                    The database's admin connection Secret in this namespace, and the keys that hold
-                    its host, port, user and password (the catalog says which, per cloud). Only
-                    provider-sql reads it; the component never sees it.
-                  required: [name]
-                  properties:
-                    name: {type: string, pattern: "^[a-z0-9][a-z0-9.-]{0,252}$"}
-                    endpointKey: {type: string, default: endpoint}
-                    portKey: {type: string, default: port}
-                    usernameKey: {type: string, default: username}
-                    passwordKey: {type: string, default: password}
                 reads:
                   type: array
                   description: >-
@@ -72,11 +61,6 @@ spec:
                     A NOLOGIN role <login>_break_glass that the login administers, so it can grant time-boxed
                     write access to its own objects to a person, and revoke it.
                   default: false
-                sslMode:
-                  type: string
-                  description: How provider-sql's connection checks TLS.
-                  enum: [require, verify-ca, verify-full]
-                  default: require
                 tags:
                   type: object
                   description: Labels (product, feature, component).

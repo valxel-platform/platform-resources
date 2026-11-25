@@ -83,8 +83,9 @@ with [provider-sql](https://github.com/crossplane-contrib/provider-sql). Designs
 SDLC tool makes one per transform when it deploys, from the tables and columns the transform's data
 contracts give it, and binds it with the component.
 
-- provider-sql signs in with the database's admin Secret (`<database>-postgres`: endpoint, port,
-  username, password). The component never sees those credentials.
+- The login names only its database. The database's own Composition (gcp/, azure/) makes the
+  provider-sql ProviderConfig `<database>-sql-admin` from its admin Secret, so the admin
+  credentials never leave it and the component never sees them.
 - The login gets SELECT on exactly the listed columns, USAGE on their schemas, CONNECT, and CREATE
   on the database when `createSchemas` is set (a transform builds and swaps its own schemas). It has
   no superuser, createdb, createrole, replication or bypassrls.
@@ -96,8 +97,8 @@ contracts give it, and binds it with the component.
   the transform's schemas are dropped first.
 
 `sql/e2e/check.sh` (workflow `sql-login`) runs it against a real Postgres in k3d and checks what the
-login can and can't do. On AWS, the admin Secret written by OpenChoreo's postgres-crossplane is still
-to be checked on a real data plane (the catalog marks it `verified: false`).
+login can and can't do. On AWS the database is OpenChoreo's postgres-crossplane, which doesn't make
+that ProviderConfig yet: logins there wait for it to be added and checked on a real data plane.
 
 ## How access works
 

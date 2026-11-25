@@ -1,8 +1,8 @@
 # Builds a PostgresLogin with provider-sql, on every cloud (catalog type postgres-login).
 #
-#   ProviderConfig   <name>-admin: how provider-sql signs in to the database, from its admin
-#                    connection Secret (spec.adminSecret, the catalog's keys per cloud). Only the
-#                    provider reads it; the component never does.
+#   (no ProviderConfig of its own: the database's Composition makes <database>-sql-admin, from its
+#   admin Secret, in the same namespace. The login names only the database; the admin credentials
+#   never leave the database's Composition, and the component never sees them.)
 #   Role             the login (LOGIN, no SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or BYPASSRLS),
 #                    a password provider-sql makes and writes, with the endpoint and port, to the
 #                    Secret <name>-login
@@ -14,8 +14,8 @@
 #   Role, Grant      with spec.breakGlass: <login>_break_glass (NOLOGIN), which the login administers
 #
 # No settings from an EnvironmentConfig: everything comes from the XR, which the SDLC tool writes
-# from the approved design. TLS: sslMode require by default (the managed databases' server
-# certificates aren't in the provider's trust store yet; verify-full once their CA bundles are).
+# from the approved design. TLS: the database's ProviderConfig uses sslMode require (the managed
+# databases' server certificates aren't in the provider's trust store yet; verify-full once they are).
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
@@ -38,8 +38,7 @@ spec:
             {{- $xr := .observed.composite.resource }}
             {{- $name := $xr.metadata.name }}
             {{- $login := $xr.spec.login }}
-            {{- $admin := $xr.spec.adminSecret }}
-            {{- $pc := printf "%s-admin" $name | trunc 63 | trimSuffix "-" }}
+            {{- $pc := printf "%s-sql-admin" ($xr.spec.database | replace "_" "-") | trunc 63 | trimSuffix "-" }}
             {{- $loginSecret := printf "%s-login" $name | trunc 63 | trimSuffix "-" }}
             {{- $keySecret := printf "%s-key" $name | trunc 63 | trimSuffix "-" }}
             {{- $labels := default (dict) $xr.spec.tags }}
@@ -50,25 +49,6 @@ spec:
             {{- with getComposedResource . "login" }}
             {{- range (dig "status" "conditions" (list) .) }}{{- if and (eq .type "Ready") (eq .status "True") }}{{- $loginReady = true }}{{- end }}{{- end }}
             {{- end }}
-            ---
-            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
-            kind: ProviderConfig
-            metadata:
-              name: {{ $pc }}
-              annotations:
-                {{ setResourceNameAnnotation "admin" }}
-            spec:
-              defaultDatabase: {{ $xr.spec.database | quote }}
-              sslMode: {{ default "require" $xr.spec.sslMode | quote }}
-              credentials:
-                source: PostgreSQLConnectionSecret
-                connectionSecretRef:
-                  name: {{ $admin.name | quote }}
-                secretKeyMapping:
-                  endpoint: {{ default "endpoint" $admin.endpointKey | quote }}
-                  port: {{ default "port" $admin.portKey | quote }}
-                  username: {{ default "username" $admin.usernameKey | quote }}
-                  password: {{ default "password" $admin.passwordKey | quote }}
             ---
             apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
             kind: Role

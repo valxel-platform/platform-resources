@@ -8,10 +8,8 @@ metadata:
 spec:
   database: emr
   login: emr_transform
-  adminSecret: { name: emr-db-postgres }
   reads:
     - { schema: public, table: notes, columns: [note_id, patient_id, signed_at, clinic_id, _updated_at] }
   createSchemas: true
   breakGlass: true
-  sslMode: require
   tags: { valxel_product: emr, valxel_component: emr-transform }
