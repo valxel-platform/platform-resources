@@ -120,6 +120,7 @@ spec:
             status:
               bucket: {{ $name | quote }}
               id: {{ printf "gs://%s" $name | quote }}
+              endpoint: "storage.googleapis.com"
             {{- end }}
 
     - step: ready

@@ -190,6 +190,7 @@ spec:
             status:
               bucket: {{ printf "https://%s.blob.core.windows.net/objects" $name | quote }}
               id: {{ $acct | quote }}
+              endpoint: {{ printf "%s.blob.core.windows.net" $name | quote }}
             {{- end }}
 
     - step: ready

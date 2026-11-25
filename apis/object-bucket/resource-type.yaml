@@ -67,10 +67,12 @@ spec:
       value: ${applied.instance.status.bucket}
     - name: id
       value: ${applied.instance.status.id}
+    - name: endpoint
+      value: ${applied.instance.status.endpoint}
 
   resources:
     - id: instance
-      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.bucket) && has(applied.instance.status.id)}"
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.bucket) && has(applied.instance.status.id) && has(applied.instance.status.endpoint)}"
       template:
         apiVersion: platform.valxel.dev/v1alpha1
         kind: ObjectBucket
