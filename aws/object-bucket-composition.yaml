@@ -220,6 +220,7 @@ spec:
             status:
               bucket: {{ $name | quote }}
               id: {{ $arn | quote }}
+              endpoint: {{ printf "%s.s3.%s.amazonaws.com" $name $env.region | quote }}
             {{- end }}
 
     - step: ready

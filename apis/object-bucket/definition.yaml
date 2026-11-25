@@ -67,3 +67,5 @@ spec:
                   type: string
                 id:
                   type: string
+                endpoint:
+                  type: string

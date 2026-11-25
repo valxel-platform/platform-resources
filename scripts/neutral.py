@@ -37,7 +37,8 @@ PAIRS = {
                   {"url": ["sendTo", "receiveFrom"], "arn": ["id"], "deadLetterArn": ["deadLetterId"]},
                   {"url": "send_to", "arn": "id"}),
     "s3-bucket": ("object-bucket", "S3Bucket", "ObjectBucket", "s3buckets", "objectbuckets",
-                  {"bucketName": ["bucket"], "arn": ["id"]}, {"bucket": "bucket", "arn": "id"}),
+                  {"bucketName": ["bucket"], "arn": ["id"], "endpoint": ["endpoint"]},
+                  {"bucket": "bucket", "arn": "id", "endpoint": "endpoint"}),
     "sns-topic": ("topic", "SnsTopic", "Topic", "snstopics", "topics", {"arn": ["topic"]}, {"arn": "topic"}),
 }
 HEADER = "# Written by scripts/neutral.py from {src}: change that file and run the script, not this one.\n"
