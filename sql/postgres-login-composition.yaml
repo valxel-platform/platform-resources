@@ -1,0 +1,197 @@
+# Builds a PostgresLogin with provider-sql, on every cloud (catalog type postgres-login).
+#
+#   (no ProviderConfig of its own: the database's Composition makes <database>-sql-admin, from its
+#   admin Secret, in the same namespace. The login names only the database; the admin credentials
+#   never leave the database's Composition, and the component never sees them.)
+#   Role             the login (LOGIN, no SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or BYPASSRLS),
+#                    a password provider-sql makes and writes, with the endpoint and port, to the
+#                    Secret <name>-login
+#   Secret           <name>-key: tokenize_key, 48 random characters made once and kept (later
+#                    reconciles keep what the Secret holds), never in a status
+#   Grant            CONNECT on the database, and CREATE when spec.createSchemas
+#   Grant            USAGE on each schema spec.reads names, and SELECT on exactly its columns of
+#                    exactly its tables: nothing else in the database is readable to the login
+#   Role, Grant      with spec.breakGlass: <login>_break_glass (NOLOGIN), which the login administers
+#
+# No settings from an EnvironmentConfig: everything comes from the XR, which the SDLC tool writes
+# from the approved design. TLS: the database's ProviderConfig uses sslMode require (the managed
+# databases' server certificates aren't in the provider's trust store yet; verify-full once they are).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: postgres-login
+spec:
+  compositeTypeRef:
+    apiVersion: platform.valxel.dev/v1alpha1
+    kind: PostgresLogin
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $name := $xr.metadata.name }}
+            {{- $login := $xr.spec.login }}
+            {{- $pc := printf "%s-sql-admin" ($xr.spec.database | replace "_" "-") | trunc 63 | trimSuffix "-" }}
+            {{- $loginSecret := printf "%s-login" $name | trunc 63 | trimSuffix "-" }}
+            {{- $keySecret := printf "%s-key" $name | trunc 63 | trimSuffix "-" }}
+            {{- $labels := default (dict) $xr.spec.tags }}
+            {{- /* The key is made once: later reconciles keep what the Secret holds. */}}
+            {{- $key := randAlphaNum 48 | b64enc }}
+            {{- with getComposedResource . "key" }}{{- $key = dig "data" "tokenize_key" $key . }}{{- end }}
+            {{- $loginReady := false }}
+            {{- with getComposedResource . "login" }}
+            {{- range (dig "status" "conditions" (list) .) }}{{- if and (eq .type "Ready") (eq .status "True") }}{{- $loginReady = true }}{{- end }}{{- end }}
+            {{- end }}
+            ---
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: Role
+            metadata:
+              name: {{ printf "%s-role" $name | trunc 63 | trimSuffix "-" }}
+              labels:
+                {{- range $k, $v := $labels }}
+                {{ $k }}: {{ $v | toString | quote }}
+                {{- end }}
+              annotations:
+                {{ setResourceNameAnnotation "login" }}
+                crossplane.io/external-name: {{ $login | quote }}
+            spec:
+              forProvider:
+                connectionLimit: 10
+                privileges:
+                  login: true
+                  inherit: true
+                  superUser: false
+                  createDb: false
+                  createRole: false
+                  replication: false
+                  bypassRls: false
+              writeConnectionSecretToRef:
+                name: {{ $loginSecret }}
+              providerConfigRef:
+                kind: ProviderConfig
+                name: {{ $pc }}
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: {{ $keySecret }}
+              annotations:
+                {{ setResourceNameAnnotation "key" }}
+            type: Opaque
+            data:
+              tokenize_key: {{ $key }}
+            ---
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: Grant
+            metadata:
+              name: {{ printf "%s-database" $name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "grant-database" }}
+            spec:
+              forProvider:
+                role: {{ $login | quote }}
+                database: {{ $xr.spec.database | quote }}
+                privileges: [CONNECT{{ if $xr.spec.createSchemas }}, CREATE{{ end }}]
+              providerConfigRef:
+                kind: ProviderConfig
+                name: {{ $pc }}
+            {{- $schemas := dict }}
+            {{- range (default (list) $xr.spec.reads) }}{{- $_ := set $schemas .schema true }}{{- end }}
+            {{- range $schema, $_ := $schemas }}
+            ---
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: Grant
+            metadata:
+              name: {{ printf "%s-usage-%s" $name ($schema | replace "_" "-") | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "grant-usage-%s" $schema) }}
+            spec:
+              forProvider:
+                role: {{ $login | quote }}
+                database: {{ $xr.spec.database | quote }}
+                schema: {{ $schema | quote }}
+                privileges: [USAGE]
+              providerConfigRef:
+                kind: ProviderConfig
+                name: {{ $pc }}
+            {{- end }}
+            {{- range (default (list) $xr.spec.reads) }}
+            ---
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: Grant
+            metadata:
+              name: {{ printf "%s-read-%s-%s" $name (.schema | replace "_" "-") (.table | replace "_" "-") | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation (printf "grant-read-%s-%s" .schema .table) }}
+            spec:
+              forProvider:
+                role: {{ $login | quote }}
+                database: {{ $xr.spec.database | quote }}
+                schema: {{ .schema | quote }}
+                tables: [{{ .table | quote }}]
+                columns:
+                  {{- range .columns }}
+                  - {{ . | quote }}
+                  {{- end }}
+                privileges: [SELECT]
+              providerConfigRef:
+                kind: ProviderConfig
+                name: {{ $pc }}
+            {{- end }}
+            {{- if $xr.spec.breakGlass }}
+            ---
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: Role
+            metadata:
+              name: {{ printf "%s-break-glass" $name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "break-glass" }}
+                crossplane.io/external-name: {{ printf "%s_break_glass" $login | quote }}
+            spec:
+              forProvider:
+                privileges:
+                  login: false
+                  superUser: false
+                  createDb: false
+                  createRole: false
+                  replication: false
+                  bypassRls: false
+              providerConfigRef:
+                kind: ProviderConfig
+                name: {{ $pc }}
+            ---
+            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
+            kind: Grant
+            metadata:
+              name: {{ printf "%s-break-glass-admin" $name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "grant-break-glass" }}
+            spec:
+              forProvider:
+                role: {{ $login | quote }}
+                memberOf: {{ printf "%s_break_glass" $login | quote }}
+                withOption: ADMIN
+              providerConfigRef:
+                kind: ProviderConfig
+                name: {{ $pc }}
+            {{- end }}
+            {{- if $loginReady }}
+            ---
+            apiVersion: platform.valxel.dev/v1alpha1
+            kind: PostgresLogin
+            status:
+              database: {{ $xr.spec.database | quote }}
+              secret: {{ $loginSecret | quote }}
+              tokenizeSecret: {{ $keySecret | quote }}
+            {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

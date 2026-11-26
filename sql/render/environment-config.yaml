@@ -1,0 +1,7 @@
+# postgres-login reads no EnvironmentConfig: everything comes from its XR. The render loop passes
+# each flavour one, so this is an empty one.
+apiVersion: apiextensions.crossplane.io/v1beta1
+kind: EnvironmentConfig
+metadata:
+  name: valxel-sql
+data: {}
