@@ -1,0 +1,75 @@
+# The db-logins controller (controllers/db-logins, constitution VX-20): its tests against a real
+# Postgres, then its image in a k3d cluster with a real Postgres and a DatabaseLogin (e2e/check.sh).
+name: db-logins
+
+on:
+  pull_request:
+    paths: ["controllers/db-logins/**", "apis/postgres-login/**", "sql/**", ".github/workflows/db-logins.yml"]
+  push:
+    branches: [main]
+    paths: ["controllers/db-logins/**", "apis/postgres-login/**", "sql/**", ".github/workflows/db-logins.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-logins-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  K3D_VERSION: v5.8.3
+  K3D_SHA256: dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e  # k3d-linux-amd64, the release's checksums.txt
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: logins }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    defaults:
+      run:
+        working-directory: controllers/db-logins
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Tests, on a real Postgres
+        env:
+          DB_LOGINS_TEST_URL: host=localhost port=5432 user=postgres password=postgres dbname=logins
+        run: |
+          pip install --quiet ".[test]"
+          python -m pytest -q tests
+
+  e2e:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install k3d
+        run: |
+          curl -sSfL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/k3d-linux-amd64"
+          echo "$K3D_SHA256  /tmp/k3d" | sha256sum -c -
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d && k3d version
+      - name: The controller's image, in a cluster
+        run: |
+          docker build -t db-logins:e2e controllers/db-logins
+          k3d cluster create e2e --no-lb --k3s-arg "--disable=traefik@server:0" --wait
+          k3d image import db-logins:e2e -c e2e
+      - name: A login, end to end
+        run: controllers/db-logins/e2e/check.sh k3d-e2e db-logins:e2e
+      - name: What happened
+        if: failure()
+        run: |
+          kubectl --context k3d-e2e -n e2e-logins get databaselogins -o yaml || true
+          kubectl --context k3d-e2e -n valxel-db-logins logs deploy/db-logins --tail=200 || true

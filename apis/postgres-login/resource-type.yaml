@@ -1,23 +1,23 @@
 # A login of its own in a product database, as an OpenChoreo ClusterResourceType (catalog type
 # postgres-login). Not chosen in designs: the SDLC tool makes one per transform from the approved
 # design (what it may read comes from the data contracts) and binds it with the component. It
-# renders one PostgresLogin into the cell namespace; sql/postgres-login-composition.yaml builds it
-# with provider-sql. The component gets every output by reference to a Secret: the login's endpoint,
-# port, username and password (written by provider-sql) and its tokenize key (made once). The
-# database's admin credentials stay with provider-sql.
+# renders one PostgresLogin into the cell namespace; sql/postgres-login-composition.yaml asks the
+# db-logins controller for it. No output is a secret (VX-20): the component signs in as its own
+# workload identity with a short-lived token, and tokenizes through a function whose key stays in
+# the database.
 apiVersion: openchoreo.dev/v1alpha1
 kind: ClusterResourceType
 metadata:
   name: postgres-login
   annotations:
     openchoreo.dev/description: >-
-      A login in a product database with exactly the grants its design approves, made by the Valxel
-      platform's Crossplane Composition (provider-sql).
+      A login in a product database with exactly the grants its design approves, for the component's
+      own workload identity, made by the Valxel platform's db-logins controller. No password.
 spec:
   parameters:
     openAPIV3Schema:
       type: object
-      required: [database, login]
+      required: [database, login, component]
       properties:
         database:
           type: string
@@ -25,8 +25,11 @@ spec:
           pattern: "^[a-z][a-z0-9_]{0,62}$"
         login:
           type: string
-          description: The role's name in the database. Never changes.
-          pattern: "^[a-z][a-z0-9_]{0,50}$"
+          description: The login's own name (break-glass role, tokenize key). Never changes.
+          pattern: "^[a-z][a-z0-9_]{0,40}$"
+        component:
+          type: string
+          description: The component that signs in with its own workload identity.
         reads:
           type: array
           description: SELECT on these columns of these tables (written by the SDLC tool from the data contracts).
@@ -44,6 +47,9 @@ spec:
         breakGlass:
           type: boolean
           default: false
+        tokenize:
+          type: boolean
+          default: false
         tags:
           type: object
           default: {}
@@ -54,31 +60,23 @@ spec:
 
   outputs:
     - name: host
-      secretKeyRef:
-        name: ${applied.instance.status.secret}
-        key: endpoint
+      value: ${applied.instance.status.host}
     - name: port
-      secretKeyRef:
-        name: ${applied.instance.status.secret}
-        key: port
+      value: ${applied.instance.status.port}
     - name: database
       value: ${applied.instance.status.database}
     - name: username
-      secretKeyRef:
-        name: ${applied.instance.status.secret}
-        key: username
-    - name: password
-      secretKeyRef:
-        name: ${applied.instance.status.secret}
-        key: password
-    - name: tokenize_key
-      secretKeyRef:
-        name: ${applied.instance.status.tokenizeSecret}
-        key: tokenize_key
+      value: ${applied.instance.status.username}
+    - name: auth
+      value: ${applied.instance.status.auth}
+    - name: break_glass_role
+      value: ${applied.instance.status.breakGlassRole}
+    - name: tokenize_function
+      value: ${applied.instance.status.tokenizeFunction}
 
   resources:
     - id: instance
-      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.secret)}"
+      readyWhen: "${has(applied.instance.status.conditions) && applied.instance.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') && has(applied.instance.status.username)}"
       template:
         apiVersion: platform.valxel.dev/v1alpha1
         kind: PostgresLogin
@@ -89,7 +87,9 @@ spec:
         spec:
           database: ${parameters.database}
           login: ${parameters.login}
+          component: ${parameters.component}
           reads: ${parameters.reads}
           createSchemas: ${parameters.createSchemas}
           breakGlass: ${parameters.breakGlass}
+          tokenize: ${parameters.tokenize}
           tags: ${parameters.tags}

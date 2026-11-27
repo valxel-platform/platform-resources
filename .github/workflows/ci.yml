@@ -20,7 +20,7 @@ env:
   # Pin a Crossplane CLI release here once you have one you trust; "current" is the latest stable.
   CROSSPLANE_VERSION: current
   # The catalog's sdlc-governance ref; a catalog change merges there first.
-  VALXEL_CATALOG_REF: main
+  VALXEL_CATALOG_REF: fc0200f7b676e2e25ac0d801a64ae11b23a3f2e9  # sdlc-governance#41; back to main once merged
 
 jobs:
   render:
@@ -54,7 +54,7 @@ jobs:
           }
           # aws/: every type on AWS (MSK for Kafka). gcp/ and azure/: every type on Google Cloud and
           # Azure but Kafka. strimzi/: the Kafka types outside AWS production. k8s/: in-cluster
-          # objects (code-runner). sql/: logins inside a product database (provider-sql), every cloud.
+          # objects (code-runner). sql/: logins inside a product database (the db-logins controller), every cloud.
           for flavour in aws gcp azure strimzi k8s sql; do
             for dir in $flavour/render/*/; do
               kind=$(basename "$dir")
@@ -73,7 +73,7 @@ jobs:
       - name: Validate against the provider and XRD schemas
         run: |
           # One YAML stream: each file's documents, separated.
-          for f in aws/provider.yaml gcp/provider.yaml azure/provider.yaml sql/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
+          for f in aws/provider.yaml gcp/provider.yaml azure/provider.yaml apis/*/definition.yaml k8s/agent-sandbox-crds-*.yaml; do cat "$f"; printf '\n---\n'; done > extensions.yaml
           # Validate what the Compositions compose. The XRs are this module's own inputs; the
           # tests check them against the XRDs and the catalog.
           python3 - <<'PY'

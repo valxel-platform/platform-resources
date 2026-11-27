@@ -2,7 +2,8 @@
 # postgres-login). Not chosen in designs: the SDLC tool makes one for each transform, from the
 # approved design: the tables and columns it may read come from the data contracts. The
 # postgres-login ClusterResourceType creates one in the cell namespace of each environment it is
-# bound to; sql/postgres-login-composition.yaml builds it with provider-sql on every cloud.
+# bound to; sql/postgres-login-composition.yaml asks the db-logins controller for it (VX-20): the
+# component signs in with its own workload identity, and no password exists anywhere.
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
@@ -23,18 +24,25 @@ spec:
           properties:
             spec:
               type: object
-              required: [database, login]
+              required: [database, login, component]
               properties:
                 database:
                   type: string
                   description: >-
                     The database the login is made in (the postgres resource's database). Its
-                    Composition provides the ProviderConfig <database>-sql-admin in this namespace.
+                    Composition provides the ConfigMap <database>-sql-admin in this namespace: where
+                    it is and how the controller signs in, no secret.
                   pattern: "^[a-z][a-z0-9_]{0,62}$"
                 login:
                   type: string
-                  description: The role's name in the database. Never changes.
-                  pattern: "^[a-z][a-z0-9_]{0,50}$"
+                  description: >-
+                    The login's own name, for its break-glass role (<login>_break_glass) and tokenize
+                    key (<login>_key). Never changes. The role it signs in as is its component's
+                    workload identity.
+                  pattern: "^[a-z][a-z0-9_]{0,40}$"
+                component:
+                  type: string
+                  description: The component that signs in, with its own WorkloadIdentity.
                 reads:
                   type: array
                   description: >-
@@ -61,6 +69,12 @@ spec:
                     A NOLOGIN role <login>_break_glass that the login administers, so it can grant time-boxed
                     write access to its own objects to a person, and revoke it.
                   default: false
+                tokenize:
+                  type: boolean
+                  description: >-
+                    EXECUTE on <login>_key.tokenize(text): HMAC-SHA256 with a key made inside the
+                    database and readable only by the function's owner. The key never leaves it.
+                  default: false
                 tags:
                   type: object
                   description: Labels (product, feature, component).
@@ -69,11 +83,14 @@ spec:
             status:
               type: object
               properties:
-                database:
+                host: {type: string}
+                port: {type: string}
+                database: {type: string}
+                username:
                   type: string
-                secret:
+                  description: The role the component signs in as, with a token from its own identity.
+                auth:
                   type: string
-                  description: The Secret with the login's endpoint, port, username and password.
-                tokenizeSecret:
-                  type: string
-                  description: The Secret with a key of the component's own (tokenize_key), made once and kept.
+                  description: How it signs in (gcp-iam, azure-entra).
+                breakGlassRole: {type: string}
+                tokenizeFunction: {type: string}

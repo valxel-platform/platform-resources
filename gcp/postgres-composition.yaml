@@ -1,12 +1,15 @@
 # Builds a PostgresDatabase as a Cloud SQL for PostgreSQL instance of its own (constitution VX-19,
 # catalog type postgres on Google Cloud; on AWS the type is OpenChoreo's postgres-crossplane).
 #
-#   ProviderConfig      <database>-sql-admin (provider-sql): how the product's logins
-#                       (postgres-login) are made in this database, from the Secret below
-#   Secret              <name>-postgres in the cell namespace: the user's password, made once
-#                       (random) and kept, never in the resource's status or the instance's spec;
-#                       with the endpoint, port and username, the admin connection a postgres-login
-#                       signs in with (provider-sql)
+#   ConfigMap           <database>-sql-admin: where the database is and how the db-logins
+#                       controller signs in to make the product's logins (postgres-login); no secret
+#   User                the db-logins controller's service account (EnvironmentConfig
+#                       dbLoginsServiceAccount) as an IAM database user with cloudsqlsuperuser:
+#                       it signs in with short-lived tokens, never a password (VX-20)
+#   Secret              <name>-postgres in the cell namespace: the `app` user's password, made once
+#                       (random) and kept, never in the resource's status or the instance's spec.
+#                       For the components bound to the database until they sign in with their own
+#                       identity too (VX-20); the platform never signs in with it
 #   DatabaseInstance    Enterprise edition, private IP only on the data plane's network (which has
 #                       private services access), TLS required, CMEK with the product key,
 #                       backups with point-in-time recovery, deletion protection, max_connections
@@ -99,22 +102,37 @@ spec:
               port: {{ "5432" | b64enc }}
               endpoint: {{ $host | b64enc }}
             ---
-            {{- /* How provider-sql signs in to this database, for the product's logins (postgres-login):
-                   named after the database, so a login needs only the database's name. The admin
-                   credentials stay in this namespace's Secret; only the provider reads them. */}}
-            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
-            kind: ProviderConfig
+            {{- /* Where the database is and how the db-logins controller signs in, for the product's
+                   logins (postgres-login): named after the database, so a login needs only its name.
+                   No secret: the controller signs in as its own service account, with a token. */}}
+            apiVersion: v1
+            kind: ConfigMap
             metadata:
               name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-") | trunc 63 | trimSuffix "-" }}
               annotations:
                 {{ setResourceNameAnnotation "sql-admin" }}
+            data:
+              host: {{ $host | quote }}
+              port: "5432"
+              database: {{ $xr.spec.database | quote }}
+              auth: gcp-iam
+              adminUser: {{ $env.dbLoginsServiceAccount | trimSuffix ".gserviceaccount.com" | quote }}
+              instance: {{ printf "%s:%s" $env.project $name | quote }}
+            ---
+            {{- /* The db-logins controller, as this instance's IAM admin: no password (VX-20). */}}
+            apiVersion: sql.gcp.m.upbound.io/v1beta1
+            kind: User
+            metadata:
+              name: {{ printf "%s-db-logins" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "db-logins" }}
+                crossplane.io/external-name: {{ $env.dbLoginsServiceAccount | trimSuffix ".gserviceaccount.com" | quote }}
             spec:
-              defaultDatabase: {{ $xr.spec.database | quote }}
-              sslMode: require
-              credentials:
-                source: PostgreSQLConnectionSecret
-                connectionSecretRef:
-                  name: {{ $secret }}
+              forProvider:
+                project: {{ $env.project | quote }}
+                instance: {{ $name | quote }}
+                type: CLOUD_IAM_SERVICE_ACCOUNT
+                databaseRoles: [cloudsqlsuperuser]
             ---
             apiVersion: sql.gcp.m.upbound.io/v1beta1
             kind: DatabaseInstance
@@ -154,6 +172,8 @@ spec:
                   databaseFlags:
                     - name: max_connections
                       value: {{ $size.connections | quote }}
+                    - name: cloudsql.iam_authentication
+                      value: "on"
                   userLabels:
                     {{- range $k, $v := $labels }}
                     {{ $k | quote }}: {{ $v | toString | quote }}

@@ -1,28 +1,22 @@
-# After provider-sql made the role: it's Ready, and the key Secret holds its key (kept, not remade).
-apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
-kind: Role
+# After the db-logins controller made the login: Ready, with what the component needs.
+apiVersion: platform.valxel.dev/v1alpha1
+kind: DatabaseLogin
 metadata:
-  name: emr-transform-login-role
+  name: emr-transform-login
   namespace: dp-acme-emr-staging-x7k2
   annotations:
     crossplane.io/composition-resource-name: login
-    crossplane.io/external-name: emr_transform
 spec:
-  forProvider:
-    privileges: { login: true }
-  providerConfigRef: { kind: ProviderConfig, name: emr-sql-admin }
+  server: emr-sql-admin
+  login: emr_transform
+  principal: { component: emr-transform }
 status:
   conditions:
-    - { type: Ready, status: "True", reason: Available }
-    - { type: Synced, status: "True", reason: ReconcileSuccess }
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: emr-transform-login-key
-  namespace: dp-acme-emr-staging-x7k2
-  annotations:
-    crossplane.io/composition-resource-name: key
-type: Opaque
-data:
-  tokenize_key: a2VwdC1mcm9tLWJlZm9yZS1rZXB0LWZyb20tYmVmb3JlLWtlcHQtZnJvbS1iZWY=
+    - { type: Ready, status: "True", reason: Made, message: the login has exactly its grants }
+  host: 10.20.0.5
+  port: "5432"
+  database: emr
+  username: vx-1a2b3c@acme-emr-staging.iam
+  auth: gcp-iam
+  breakGlassRole: emr_transform_break_glass
+  tokenizeFunction: emr_transform_key.tokenize

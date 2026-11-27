@@ -1,0 +1,81 @@
+# The end-to-end check's database: Postgres 17, and what a database's Composition makes beside it,
+# but signing in with a password, the one thing only this test may do (DB_LOGINS_ALLOW_PASSWORD).
+# Synthetic; test only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-logins
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: emr-admin, namespace: e2e-logins }
+stringData: { password: admin-only-e2e-password }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: emr-transform-test-login, namespace: e2e-logins }
+stringData: { password: login-only-e2e-password }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: emr-sql-admin, namespace: e2e-logins }
+data:
+  host: postgres.e2e-logins.svc.cluster.local
+  port: "5432"
+  database: emr
+  auth: password
+  adminUser: app
+  passwordSecret: emr-admin
+---
+# Test only: the controller may read this namespace's Secrets (never granted in an environment).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: e2e-secrets, namespace: e2e-logins }
+rules: [{ apiGroups: [""], resources: [secrets], verbs: [get] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: e2e-secrets, namespace: e2e-logins }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-secrets }
+subjects: [{ kind: ServiceAccount, name: db-logins, namespace: valxel-db-logins }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: postgres, namespace: e2e-logins }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17
+          env:
+            - { name: POSTGRES_USER, value: app }
+            - { name: POSTGRES_PASSWORD, value: admin-only-e2e-password }
+            - { name: POSTGRES_DB, value: emr }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "app", "-d", "emr"] }
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: e2e-logins }
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+apiVersion: platform.valxel.dev/v1alpha1
+kind: DatabaseLogin
+metadata: { name: emr-transform-login, namespace: e2e-logins }
+spec:
+  server: emr-sql-admin
+  login: emr_transform
+  principal: { password: { user: emr_transform, secret: emr-transform-test-login } }
+  reads:
+    - { schema: public, table: notes, columns: [note_id, patient_id, signed_at, clinic_id, _updated_at] }
+  createSchemas: true
+  breakGlass: true
+  tokenize: true

@@ -21,6 +21,13 @@ data:
   cmkIdentityId: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>
   # The AKS cluster's OIDC issuer: components' identities trust their service accounts through it.
   oidcIssuer: https://<region>.oic.prod-aks.azure.com/<tenant>/<cluster>/
+  # The tenant, and the db-logins controller's managed identity (platform-foundation's azure module):
+  # every product database's Entra admin, signing in with short-lived tokens, so the platform holds
+  # no database password (constitution VX-20).
+  tenantId: <tenant-id>
+  dbLoginsIdentity:
+    name: <identity-name>
+    principalId: <principal-id>
   # Private endpoints' subnet and each service's private DNS zone; PostgreSQL's delegated subnet and zone.
   privateEndpointSubnetId: /subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>
   privateDnsZones:

@@ -26,6 +26,10 @@ data:
   alarmChannel: ""
   # Optional: a bucket for Cloud Storage access logs. Empty: no access logs.
   accessLogBucket: ""
+  # The db-logins controller's service account (platform-foundation's gcp module): every product
+  # database's IAM admin, signing in with short-lived tokens, so the platform holds no database
+  # password (constitution VX-20).
+  dbLoginsServiceAccount: valxel-db-logins@<project-id>.iam.gserviceaccount.com
   # Labels on every resource, on top of the product, feature and data class labels each carries.
   labels:
     valxel_managed-by: crossplane
