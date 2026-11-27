@@ -16,4 +16,15 @@ pinned by digest, and the controller's ServiceAccount bound to the installation'
 what each database's Composition makes its admin (`dbLoginsServiceAccount`, `dbLoginsIdentity` in the
 EnvironmentConfig).
 
+Tokenize keys are versioned, and every token says which key made it (`v2:3d81...`). A key is
+replaced after its cryptoperiod (`tokenizeKey.rotateEveryDays`, 365 by default) and the replaced one
+destroyed `retireAfterDays` later (90). To rotate now, set a new `rotateRequest` on the
+DatabaseLogin; with `compromised: true` the replaced key is destroyed at once:
+
+    kubectl -n <namespace> patch databaselogin <name> --type=merge \
+      -p '{"spec":{"tokenizeKey":{"rotateRequest":"leak-2027-03-04","compromised":true}}}'
+
+Old tokens are never translated to new ones. The transform rebuilds its marts in full when the key
+version changes (template-transform), so a product's marts never mix versions.
+
 Tests: `DB_LOGINS_TEST_URL=<superuser conninfo> python -m pytest tests`; end to end, `e2e/check.sh`.

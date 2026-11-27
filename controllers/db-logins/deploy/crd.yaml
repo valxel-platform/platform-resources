@@ -55,6 +55,19 @@ spec:
                 createSchemas: { type: boolean, default: false }
                 breakGlass: { type: boolean, default: false }
                 tokenize: { type: boolean, default: false }
+                tokenizeKey:
+                  type: object
+                  description: >-
+                    The tokenize key's life. Keys are versioned and tokens carry their version
+                    ("v2:..."). A key is replaced after rotateEveryDays, or at once when rotateRequest
+                    takes a new value (a person sets it: a scheduled rotation or a suspected leak); the
+                    replaced key is destroyed retireAfterDays later, or at once when compromised. No
+                    crosswalk between old and new tokens is kept.
+                  properties:
+                    rotateEveryDays: { type: integer, minimum: 1, maximum: 3650, default: 365 }
+                    retireAfterDays: { type: integer, minimum: 0, maximum: 3650, default: 90 }
+                    rotateRequest: { type: string, maxLength: 100 }
+                    compromised: { type: boolean, default: false }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

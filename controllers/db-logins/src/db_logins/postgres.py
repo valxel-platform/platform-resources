@@ -9,9 +9,13 @@ What a login gets, and nothing else:
     holds and was not given any more are revoked, so a narrowed contract narrows the login;
   - with break_glass, a NOLOGIN role <login>_break_glass it administers (it grants it to a person
     and takes it back);
-  - with tokenize, EXECUTE on <login>_key.tokenize(text): HMAC-SHA256 with a key made inside the
-    database, readable only by the NOLOGIN role <login>_keyholder that owns the function. The key
-    never leaves the database: not to the controller, not to the pod.
+  - with tokenize, EXECUTE on <login>_key.tokenize(text) and <login>_key.key_version(): HMAC-SHA256
+    with a key made inside the database, readable only by the NOLOGIN role <login>_keyholder that
+    owns the functions. The key never leaves the database: not to the controller, not to the pod.
+    Keys are versioned and every token says which made it ("v2:3d81..."). The active key is
+    replaced when it is older than its cryptoperiod (rotate_every_days, a year by default) or when a
+    new rotation is requested; the replaced key is destroyed retire_after_days later (90 by default),
+    or at once when it is compromised. Nothing translates old tokens to new ones.
 
 The principal (the role the workload signs in as) is made by the cloud's own mechanism: a Cloud SQL
 IAM user (made through the Cloud SQL API before this runs) or an Entra principal
@@ -52,6 +56,10 @@ class Login:
     create_schemas: bool = False
     break_glass: bool = False
     tokenize: bool = False
+    rotate_every_days: int = 365
+    retire_after_days: int = 90
+    rotate_request: str = ""  # a new value replaces the active key now
+    compromised: bool = False  # with a rotation request: destroy the replaced key at once
     azure_object_id: str = ""
     password: str = field(default="", repr=False)  # kind password only (end-to-end test)
 
@@ -81,9 +89,15 @@ def login_from_spec(spec: dict[str, Any], principal: str, kind: str, *, azure_ob
         if not cols:
             raise LoginError(f"read {r.get('schema')}.{r.get('table')} lists no columns")
         reads.append(Read(str(r.get("schema") or "public"), str(r["table"]), cols))
+    key = spec.get("tokenizeKey") or {}
+    rotate, retire = int(key.get("rotateEveryDays", 365)), int(key.get("retireAfterDays", 90))
+    if not (1 <= rotate <= 3650 and 0 <= retire <= 3650):
+        raise LoginError("tokenizeKey: rotateEveryDays must be 1 to 3650 and retireAfterDays 0 to 3650")
     return Login(name=name, principal=principal, kind=kind, database=str(spec["database"]), reads=tuple(reads),
                  create_schemas=bool(spec.get("createSchemas")), break_glass=bool(spec.get("breakGlass")),
-                 tokenize=bool(spec.get("tokenize")), azure_object_id=azure_object_id, password=password)
+                 tokenize=bool(spec.get("tokenize")), rotate_every_days=rotate, retire_after_days=retire,
+                 rotate_request=str(key.get("rotateRequest") or ""), compromised=bool(key.get("compromised")),
+                 azure_object_id=azure_object_id, password=password)
 
 
 def _role(name: str, attrs: str) -> sql.Composed:
@@ -124,29 +138,33 @@ def plan(login: Login) -> list[sql.Composable]:
     return out
 
 
+NEW_KEY = "encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex')"
+ACTIVE = "retiring_since is null and destroyed_at is null"
+
+
 def _tokenize(login: Login) -> list[sql.Composable]:
     kh, ks, p = sql.Identifier(login.keyholder), sql.Identifier(login.key_schema), sql.Identifier(login.principal)
     return [
         _role(login.keyholder, "nologin"),
-        # The admin creates the key's objects as their owner, then never reads the key itself.
+        # The admin creates the key's objects as their owner, then never reads a key itself.
         sql.SQL("grant {} to current_user").format(kh),
         sql.SQL("create schema if not exists {} authorization {}").format(ks, kh),
         sql.SQL("revoke all on schema {} from public").format(ks),
-        sql.SQL("create table if not exists {}.key (k text not null)").format(ks),
-        sql.SQL("alter table {}.key owner to {}").format(ks, kh),
-        sql.SQL("revoke all on {}.key from public").format(ks),
-        # Made once, inside the database: 244 random bits from two version 4 UUIDs.
         sql.SQL(
-            "insert into {}.key (k) select encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text,"
-            " 'UTF8')), 'hex') where not exists (select 1 from {}.key)"
-        ).format(ks, ks),
+            "create table if not exists {}.keys (version int primary key, k text, request text not null,"
+            " created_at timestamptz not null default now(), retiring_since timestamptz, destroyed_at timestamptz)"
+        ).format(ks),
+        sql.SQL("alter table {}.keys owner to {}").format(ks, kh),
+        sql.SQL("revoke all on {}.keys from public").format(ks),
+        _rotate(login),
         sql.SQL(
-            """create or replace function {}.tokenize(v text) returns text language plpgsql stable security definer
+            """create or replace function {ks}.tokenize(v text) returns text language plpgsql stable security definer
         set search_path = pg_catalog as $f$
-        declare k bytea; ipad bytea; opad bytea;
+        declare ver int; k bytea; ipad bytea; opad bytea;
         begin
           if v is null then return null; end if;
-          select convert_to(t.k, 'UTF8') into strict k from {}.key t;
+          select t.version, convert_to(t.k, 'UTF8') into strict ver, k from {ks}.keys t
+            where t.retiring_since is null and t.destroyed_at is null order by t.version desc limit 1;
           if length(k) > 64 then k := sha256(k); end if;
           k := k || decode(repeat('00', 64 - length(k)), 'hex');
           ipad := k; opad := k;
@@ -154,15 +172,53 @@ def _tokenize(login: Login) -> list[sql.Composable]:
             ipad := set_byte(ipad, i, get_byte(k, i) # 54);
             opad := set_byte(opad, i, get_byte(k, i) # 92);
           end loop;
-          return encode(sha256(opad || sha256(ipad || convert_to(v, 'UTF8'))), 'hex');
+          return 'v' || ver || ':' || encode(sha256(opad || sha256(ipad || convert_to(v, 'UTF8'))), 'hex');
         end $f$"""
-        ).format(ks, ks),
+        ).format(ks=ks),
+        sql.SQL(
+            """create or replace function {ks}.key_version() returns int language sql stable security definer
+        set search_path = pg_catalog as $f$ select max(version) from {ks}.keys where {active} $f$"""
+        ).format(ks=ks, active=sql.SQL(ACTIVE)),
         sql.SQL("alter function {}.tokenize(text) owner to {}").format(ks, kh),
+        sql.SQL("alter function {}.key_version() owner to {}").format(ks, kh),
         sql.SQL("revoke all on function {}.tokenize(text) from public").format(ks),
+        sql.SQL("revoke all on function {}.key_version() from public").format(ks),
         sql.SQL("grant usage on schema {} to {}").format(ks, p),
         sql.SQL("grant execute on function {}.tokenize(text) to {}").format(ks, p),
+        sql.SQL("grant execute on function {}.key_version() to {}").format(ks, p),
+        # Last: the admin keeps no way to the keys (apply reads the version just before).
         sql.SQL("revoke {} from current_user").format(kh),
     ]
+
+
+def _rotate(login: Login) -> sql.Composable:
+    """The first key; a new one when the active key is past its cryptoperiod or a new rotation is
+    requested; and destroying replaced keys after the retire window (at once when compromised)."""
+    return sql.SQL(
+        """do $r$
+        declare cur record; req text := {req};
+        begin
+          if not exists (select 1 from {ks}.keys where {active}) then
+            insert into {ks}.keys (version, k, request)
+              select coalesce(max(version), 0) + 1, {new}, 'first' from {ks}.keys;
+            return;
+          end if;
+          select * into cur from {ks}.keys where {active} order by version desc limit 1;
+          if cur.created_at < now() - make_interval(days => {rotate})
+             or (req <> '' and not exists (select 1 from {ks}.keys where request = req)) then
+            update {ks}.keys set retiring_since = now() where version = cur.version;
+            insert into {ks}.keys (version, k, request)
+              values (cur.version + 1, {new}, coalesce(nullif(req, ''), 'cryptoperiod'));
+            if {compromised} and req <> '' then
+              update {ks}.keys set k = null, destroyed_at = now() where version = cur.version;
+            end if;
+          end if;
+          update {ks}.keys set k = null, destroyed_at = now()
+            where destroyed_at is null and retiring_since < now() - make_interval(days => {retire});
+        end $r$"""
+    ).format(ks=sql.Identifier(login.key_schema), active=sql.SQL(ACTIVE), new=sql.SQL(NEW_KEY),
+             req=sql.Literal(login.rotate_request), rotate=sql.Literal(login.rotate_every_days),
+             retire=sql.Literal(login.retire_after_days), compromised=sql.SQL("true" if login.compromised else "false"))
 
 
 def stale_columns(login: Login, held: list[tuple[str, str, str]]) -> list[sql.Composable]:
@@ -188,8 +244,15 @@ def apply(conn: Any, login: Login) -> dict[str, Any]:
     with conn.transaction(), conn.cursor() as cur:
         if login.kind == "gcp-iam" and not _exists(cur, login.principal):
             raise LoginError(f"Cloud SQL IAM user {login.principal} doesn't exist yet")
-        for stmt in plan(login):
+        steps = plan(login)
+        for stmt in steps[:-1] if login.tokenize else steps:
             cur.execute(stmt)
+        version = None
+        if login.tokenize:
+            cur.execute(sql.SQL("select max(version) from {}.keys where " + ACTIVE).format(
+                sql.Identifier(login.key_schema)))
+            version = cur.fetchone()[0]
+            cur.execute(steps[-1])
         cur.execute(HELD, [login.principal, login.principal])
         for stmt in stale_columns(login, [tuple(r) for r in cur.fetchall()]):
             cur.execute(stmt)
@@ -212,6 +275,7 @@ def apply(conn: Any, login: Login) -> dict[str, Any]:
         "database": login.database,
         "breakGlassRole": login.break_glass_role if login.break_glass else "",
         "tokenizeFunction": f"{login.key_schema}.tokenize" if login.tokenize else "",
+        "tokenizeKeyVersion": version or 0,
     }
 
 

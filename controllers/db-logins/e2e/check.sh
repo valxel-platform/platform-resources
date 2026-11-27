@@ -49,12 +49,12 @@ refused "select * from public.notes"
 refused "select id from public.billing"
 refused "insert into public.notes (note_id) values ('x')"
 refused "delete from public.notes"
-refused "select k from emr_transform_key.key"
+refused "select k from emr_transform_key.keys"
 allowed "create schema if not exists transform; create table transform.t as select note_id from public.notes"
 allowed "grant emr_transform_break_glass to reviewer; revoke emr_transform_break_glass from reviewer"
 token=$(as_login -c "select emr_transform_key.tokenize('patient-1')")
-key=$(admin -c "select k from emr_transform_key.key")
-want=$(python3 -c "import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), b'patient-1', hashlib.sha256).hexdigest())" "$key")
+key=$(admin -c "select k from emr_transform_key.keys where version = 1")
+want=v1:$(python3 -c "import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), b'patient-1', hashlib.sha256).hexdigest())" "$key")
 [ "$token" = "$want" ] || { echo "tokenize isn't HMAC-SHA256 with the database's key"; exit 1; }
 echo "tokenize: HMAC-SHA256, its key only in the database"
 attrs=$(admin -c "select rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls from pg_roles where rolname = 'emr_transform'")
@@ -68,7 +68,15 @@ for i in $(seq 1 30); do if as_login -c "select patient_id from public.notes" >/
 refused "select patient_id from public.notes"
 refused "select body from public.notes"
 allowed "select note_id from public.notes"
-[ "$(admin -c "select k from emr_transform_key.key")" = "$key" ] || { echo "the key changed"; exit 1; }
+[ "$(admin -c "select k from emr_transform_key.keys where version = 1")" = "$key" ] || { echo "the key changed"; exit 1; }
+
+# A requested rotation: tokens move to v2; v1's key is destroyed at once when it's compromised.
+k -n "$ns" patch databaselogin "$login" --type=merge -p '{"spec":{"tokenizeKey":{"rotateRequest":"e2e-leak","compromised":true}}}'
+for i in $(seq 1 30); do [ "$(status tokenizeKeyVersion)" = 2 ] && break; sleep 3; done
+[ "$(as_login -c "select emr_transform_key.tokenize('patient-1')" | cut -c1-3)" = "v2:" ] || { echo "no v2 tokens"; exit 1; }
+[ "$(admin -c "select count(*) from emr_transform_key.keys where version = 1 and k is null and destroyed_at is not null")" = 1 ] \
+  || { echo "the compromised key wasn't destroyed"; exit 1; }
+echo "rotation: v2 active, the compromised v1 destroyed"
 
 # Deleting the login takes its grants away and keeps what it owns: product data, a person's to drop.
 k -n "$ns" delete databaselogin "$login" --timeout=2m
