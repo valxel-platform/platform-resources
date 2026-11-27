@@ -1,0 +1,79 @@
+# The db-logins controller (VX-20): the only holder of the database-admin identity, in a platform
+# namespace of its own. Its ServiceAccount is bound to the platform identity the installation's Tofu
+# makes (GCP: a service account that is each product database's IAM admin; Azure: a managed identity
+# that is each server's Entra admin). No password reaches it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: valxel-db-logins
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: db-logins
+  namespace: valxel-db-logins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: valxel-db-logins
+rules:
+  - apiGroups: [platform.valxel.dev]
+    resources: [databaselogins]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [platform.valxel.dev]
+    resources: [databaselogins/status]
+    verbs: [get, patch]
+  - apiGroups: [aws.platform.valxel.dev]
+    resources: [workloadidentities]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [configmaps]  # <database>-sql-admin: no secret in it
+    verbs: [get]
+  - apiGroups: ["", events.k8s.io]
+    resources: [events]
+    verbs: [create]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [list, watch]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: valxel-db-logins
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: valxel-db-logins }
+subjects:
+  - { kind: ServiceAccount, name: db-logins, namespace: valxel-db-logins }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-logins
+  namespace: valxel-db-logins
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: db-logins } }
+  template:
+    metadata:
+      labels: { app: db-logins, azure.workload.identity/use: "true" }
+    spec:
+      serviceAccountName: db-logins
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: controller
+          image: ghcr.io/valxel-platform/db-logins:latest  # pinned by digest in platform-foundation releases.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 20m, memory: 96Mi }
+            limits: { memory: 256Mi }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

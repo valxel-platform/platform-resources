@@ -49,7 +49,8 @@ spec:
             {{- $name := printf "%s-%s" $env.namePrefix (printf "%s/%s" $xr.metadata.namespace $xr.spec.component | sha256sum | trunc 24) }}
             {{- $id := printf "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ManagedIdentity/userAssignedIdentities/%s" $env.subscription $env.resourceGroup $name }}
             {{- $client := "" }}
-            {{- with getComposedResource . "identity" }}{{- $client = dig "status" "atProvider" "clientId" "" . }}{{- end }}
+            {{- $principal := "" }}
+            {{- with getComposedResource . "identity" }}{{- $client = dig "status" "atProvider" "clientId" "" . }}{{- $principal = dig "status" "atProvider" "principalId" "" . }}{{- end }}
             ---
             apiVersion: managedidentity.azure.m.upbound.io/v1beta1
             kind: UserAssignedIdentity
@@ -92,6 +93,7 @@ spec:
             status:
               roleArn: {{ $client | quote }}
               roleName: {{ $name | quote }}
+              principalId: {{ $principal | quote }}
             {{- end }}
 
     - step: ready

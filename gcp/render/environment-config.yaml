@@ -14,5 +14,6 @@ data:
   network: projects/agtech-development/global/networks/valxel
   alarmChannel: projects/agtech-development/notificationChannels/4411223344
   accessLogBucket: vx-access-logs-agtech-development
+  dbLoginsServiceAccount: valxel-db-logins@agtech-development.iam.gserviceaccount.com
   labels:
     valxel_managed-by: crossplane

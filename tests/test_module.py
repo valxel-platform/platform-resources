@@ -21,7 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 KAFKA = ("kafka-topic", "kafka-user")
-SQL = ("postgres-login",)  # built inside the database with provider-sql: one Composition for every cloud
+SQL = ("postgres-login",)  # made inside the database by the db-logins controller: one Composition for every cloud
 
 
 def load_catalog() -> dict:
@@ -319,37 +319,44 @@ def test_openchoreos_agent_may_manage_every_group_the_resource_types_render():
 LOGIN = ROOT / "sql/postgres-login-composition.yaml"
 
 
-def test_a_login_gets_only_what_its_design_approves():
-    text = LOGIN.read_text()
-    # A plain login: none of the role privileges that reach past its grants.
-    for p in ("superUser", "createDb", "createRole", "replication", "bypassRls"):
-        assert f"{p}: false" in text, p
-    # Reads are SELECT on the columns the XR lists, USAGE on their schemas; CREATE only when asked.
-    assert "tables: [{{ .table | quote }}]" in text and "columns:" in text and "privileges: [SELECT]" in text
-    assert "privileges: [USAGE]" in text
-    assert "privileges: [CONNECT{{ if $xr.spec.createSchemas }}, CREATE{{ end }}]" in text
-    assert "ALL" not in text and "INSERT" not in text and "UPDATE" not in text
-    # No admin credentials here: the login signs in through the database's own ProviderConfig.
-    assert "connectionSecretRef" not in text and "\n            kind: ProviderConfig\n" not in text
-    assert '$pc := printf "%s-sql-admin" ($xr.spec.database | replace "_" "-")' in text
+CRD = ROOT / "controllers/db-logins/deploy/crd.yaml"
 
 
-def test_a_logins_secrets_are_made_once_and_only_referenced():
-    text = LOGIN.read_text()
-    assert '{{- with getComposedResource . "key" }}{{- $key = dig "data" "tokenize_key" $key . }}' in text
+def test_a_login_is_a_request_to_the_controller_with_no_secret_anywhere():
+    text = "\n".join(line for line in LOGIN.read_text().splitlines() if not line.lstrip().startswith("#"))
+    assert "kind: DatabaseLogin" in text and "component: {{ $xr.spec.component | quote }}" in text
+    for word in ("Secret", "password", "provider-sql", "connectionSecretRef", "randAlphaNum"):
+        assert word not in text, word
     rt = doc(ROOT / "apis/postgres-login/resource-type.yaml")
     outputs = {o["name"]: o for o in rt["spec"]["outputs"]}
-    for name in ("host", "port", "username", "password", "tokenize_key"):
-        assert "secretKeyRef" in outputs[name], name  # never a value in a status
+    assert set(outputs) == {"host", "port", "database", "username", "auth", "break_glass_role", "tokenize_function"}
+    assert all("value" in o and "secretKeyRef" not in o for o in outputs.values())
     assert rt["spec"]["retainPolicy"] == "Delete"
 
 
-def test_a_database_gives_provider_sql_its_admin_secret_under_the_name_logins_use():
-    for cloud in ("gcp", "azure"):
+def test_the_login_composes_what_the_controller_accepts():
+    import jsonschema
+
+    crd = doc(CRD)
+    xrd = doc(ROOT / "apis/postgres-login/definition.yaml")
+    login_spec = xrd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+    crd_spec = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+    assert set(login_spec) - {"database", "component", "tags"} <= set(crd_spec["properties"])
+    sample = {"server": "emr-sql-admin", "login": "emr_transform", "principal": {"component": "emr-transform"},
+              "reads": [{"schema": "public", "table": "notes", "columns": ["note_id"]}], "createSchemas": True,
+              "breakGlass": True, "tokenize": True}
+    jsonschema.validate(sample, crd_spec)
+
+
+def test_a_database_makes_the_controller_its_admin_and_says_where_it_is():
+    for cloud, auth, admin in (("gcp", "gcp-iam", "kind: User"),
+                               ("azure", "azure-entra", "kind: FlexibleServerActiveDirectoryAdministrator")):
         text = (ROOT / f"{cloud}/postgres-composition.yaml").read_text()
         assert 'name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-")' in text
-        assert "connectionSecretRef:\n                  name: {{ $secret }}" in text
-        for key in ("password:", 'username: {{ "app" | b64enc }}', 'port: {{ "5432" | b64enc }}',
-                    "endpoint: {{ $host | b64enc }}"):
-            assert key in text, (cloud, key)
-        assert "autoGeneratePassword" not in text  # one password, made once by the Composition
+        assert "kind: ConfigMap" in text and f"auth: {auth}" in text and admin in text
+        assert "ProviderConfig" not in text and "provider-sql" not in text
+        assert "autoGeneratePassword" not in text  # one password, made once, for bound components only
+    gcp = (ROOT / "gcp/postgres-composition.yaml").read_text()
+    assert "type: CLOUD_IAM_SERVICE_ACCOUNT" in gcp and "databaseRoles: [cloudsqlsuperuser]" in gcp
+    assert "name: cloudsql.iam_authentication" in gcp
+    assert "activeDirectoryAuthEnabled: true" in (ROOT / "azure/postgres-composition.yaml").read_text()

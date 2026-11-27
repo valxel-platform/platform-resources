@@ -47,3 +47,6 @@ spec:
                   type: string
                 roleName:
                   type: string
+                principalId:
+                  type: string
+                  description: Azure only, the managed identity's object (principal) id; a database's Entra admin makes its login with it.

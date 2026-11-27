@@ -4,10 +4,17 @@
 #   FlexibleServer               private access only (the data plane's delegated subnet and DNS
 #                                zone), TLS required, customer-managed key, 14 days of backups,
 #                                zone-redundant HA on medium-ha and large; the `app` login's
-#                                password from the Secret below, never in a status
-#   Secret                       <name>-postgres in the cell namespace: the password, made once
-#                                (random) and kept, with the endpoint, port and username: the
-#                                admin connection a postgres-login signs in with (provider-sql)
+#                                password from the Secret below, never in a status; Microsoft
+#                                Entra sign-in on
+#   ActiveDirectoryAdministrator the db-logins controller's managed identity (EnvironmentConfig
+#                                dbLoginsIdentity) as the server's Entra admin: it makes the
+#                                product's logins with short-lived tokens, never a password (VX-20)
+#   ConfigMap                    <database>-sql-admin: where the database is and how the
+#                                controller signs in (postgres-login); no secret
+#   Secret                       <name>-postgres in the cell namespace: the `app` password, made
+#                                once (random) and kept. For the components bound to the database
+#                                until they sign in with their own identity too (VX-20); the
+#                                platform never signs in with it. Password sign-in goes off then.
 #   FlexibleServerConfiguration  max_connections by size
 #   FlexibleServerDatabase       the design's database
 #   ManagementLock               CanNotDelete
@@ -91,22 +98,38 @@ spec:
               port: {{ "5432" | b64enc }}
               endpoint: {{ $host | b64enc }}
             ---
-            {{- /* How provider-sql signs in to this database, for the product's logins (postgres-login):
-                   named after the database, so a login needs only the database's name. The admin
-                   credentials stay in this namespace's Secret; only the provider reads them. */}}
-            apiVersion: postgresql.sql.m.crossplane.io/v1alpha1
-            kind: ProviderConfig
+            {{- /* Where the database is and how the db-logins controller signs in, for the product's
+                   logins (postgres-login): named after the database. No secret: the controller signs
+                   in as the server's Entra admin, with a token. */}}
+            apiVersion: v1
+            kind: ConfigMap
             metadata:
               name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-") | trunc 63 | trimSuffix "-" }}
               annotations:
                 {{ setResourceNameAnnotation "sql-admin" }}
+            data:
+              host: {{ $host | quote }}
+              port: "5432"
+              database: {{ $xr.spec.database | quote }}
+              auth: azure-entra
+              adminUser: {{ $env.dbLoginsIdentity.name | quote }}
+            ---
+            {{- /* The db-logins controller, as the server's Entra admin: no password (VX-20). */}}
+            apiVersion: dbforpostgresql.azure.m.upbound.io/v1beta1
+            kind: FlexibleServerActiveDirectoryAdministrator
+            metadata:
+              name: {{ printf "%s-db-logins" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              annotations:
+                {{ setResourceNameAnnotation "db-logins" }}
+                crossplane.io/external-name: {{ printf "%s/administrators/%s" $srv $env.dbLoginsIdentity.principalId | quote }}
             spec:
-              defaultDatabase: {{ $xr.spec.database | quote }}
-              sslMode: require
-              credentials:
-                source: PostgreSQLConnectionSecret
-                connectionSecretRef:
-                  name: {{ $secret }}
+              forProvider:
+                resourceGroupName: {{ $env.resourceGroup | quote }}
+                serverName: {{ $name | quote }}
+                objectId: {{ $env.dbLoginsIdentity.principalId | quote }}
+                principalName: {{ $env.dbLoginsIdentity.name | quote }}
+                principalType: ServicePrincipal
+                tenantId: {{ $env.tenantId | quote }}
             ---
             apiVersion: dbforpostgresql.azure.m.upbound.io/v1beta1
             kind: FlexibleServer
@@ -134,6 +157,10 @@ spec:
                 publicNetworkAccessEnabled: false
                 delegatedSubnetId: {{ $env.postgresSubnetId | quote }}
                 privateDnsZoneId: {{ $env.postgresDnsZoneId | quote }}
+                authentication:
+                  activeDirectoryAuthEnabled: true
+                  passwordAuthEnabled: true
+                  tenantId: {{ $env.tenantId | quote }}
                 administratorLogin: app
                 administratorPasswordSecretRef:
                   name: {{ $secret | quote }}

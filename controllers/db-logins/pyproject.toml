@@ -1,0 +1,29 @@
+[project]
+name = "db-logins"
+version = "0.1.0"
+description = "Valxel's database login controller: product logins without stored passwords (constitution VX-20)"
+requires-python = ">=3.12"
+dependencies = [
+  "kopf==1.38.0",
+  "psycopg[binary]==3.2.13",
+  "google-auth==2.40.3",
+  "requests==2.32.5",
+  "azure-identity==1.25.1",
+  "kubernetes==33.1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.2.0"]
+
+[project.scripts]
+db-logins = "db_logins.main:run"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
