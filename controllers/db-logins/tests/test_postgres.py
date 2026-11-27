@@ -46,7 +46,7 @@ def test_without_create_schemas_create_is_taken_back():
 def test_the_tokenize_key_is_made_in_the_database_and_only_its_keyholder_reads_it():
     sql = text(postgres.plan(login()))
     assert 'create schema if not exists "emr_transform_key" authorization "emr_transform_keyholder"' in sql
-    assert "security definer" in sql and 'revoke all on "emr_transform_key".key from public' in sql
+    assert "security definer" in sql and 'revoke all on "emr_transform_key".keys from public' in sql
     assert 'grant execute on function "emr_transform_key".tokenize(text) to "emr-transform@p.iam"' in sql
     assert "select on" not in sql.split("emr_transform_key", 1)[1].lower()  # nobody is granted the key table
 
@@ -134,7 +134,7 @@ def test_on_postgres_the_login_can_do_exactly_what_it_was_given(db, monkeypatch)
     assert made["tokenizeFunction"] == "dbl_t_key.tokenize"
     assert as_login("select note_id, patient_id, signed_at, clinic_id, _updated_at from public.notes")
     for refused in ("select body from public.notes", "select * from public.billing",
-                    "insert into public.notes (note_id) values ('x')", "select k from dbl_t_key.key"):
+                    "insert into public.notes (note_id) values ('x')", "select k from dbl_t_key.keys"):
         with pytest.raises(Exception, match="permission denied"):
             as_login(refused)
     as_login("create schema mine")
@@ -143,11 +143,12 @@ def test_on_postgres_the_login_can_do_exactly_what_it_was_given(db, monkeypatch)
     import hashlib
     import hmac
 
-    [(key,)] = db.execute("select k from dbl_t_key.key").fetchall()
-    assert token == hmac.new(key.encode(), b"patient-1", hashlib.sha256).hexdigest()
+    [(key,)] = db.execute("select k from dbl_t_key.keys").fetchall()
+    assert token == "v1:" + hmac.new(key.encode(), b"patient-1", hashlib.sha256).hexdigest()
+    assert made["tokenizeKeyVersion"] == 1 and as_login("select dbl_t_key.key_version()") == [(1,)]
     # Again: idempotent, and the key is kept.
     postgres.apply(db, the)
-    assert db.execute("select k from dbl_t_key.key").fetchall() == [(key,)]
+    assert db.execute("select k from dbl_t_key.keys").fetchall() == [(key,)]
     # A narrowed contract takes the column away.
     narrowed = login(kind="password", principal="dbl_t", password="login-pw-123",
                      spec={"database": db.info.dbname, "login": "dbl_t", "reads": [
@@ -169,3 +170,40 @@ def test_on_postgres_a_principal_with_unsafe_attributes_is_refused(db):
     with pytest.raises(postgres.LoginError, match="createrole"):
         postgres.apply(db, login(kind="password", principal="dbl_t", password="x",
                                  spec={"database": db.info.dbname, "login": "dbl_t"}))
+
+
+def keys(db):
+    return db.execute("select version, k is not null, request, retiring_since is not null, destroyed_at is not null"
+                      " from dbl_t_key.keys order by version").fetchall()
+
+
+def versioned(db, **key):
+    return login(kind="password", principal="dbl_t", password="login-pw-123",
+                 spec={"database": db.info.dbname, "login": "dbl_t", "tokenizeKey": key})
+
+
+@pg
+def test_on_postgres_keys_rotate_and_old_ones_are_destroyed(db):
+    postgres.apply(db, versioned(db))
+    [(t1,)] = as_login("select dbl_t_key.tokenize('patient-1')")
+    # A requested rotation: v2 is active, v1 retiring (kept for the retire window), tokens change.
+    made = postgres.apply(db, versioned(db, rotateRequest="yearly-2027"))
+    assert made["tokenizeKeyVersion"] == 2
+    assert keys(db) == [(1, True, "first", True, False), (2, True, "yearly-2027", False, False)]
+    [(t2,)] = as_login("select dbl_t_key.tokenize('patient-1')")
+    assert t1.startswith("v1:") and t2.startswith("v2:") and t1[3:] != t2[3:]
+    # The same request again rotates nothing.
+    postgres.apply(db, versioned(db, rotateRequest="yearly-2027"))
+    assert [k[0] for k in keys(db)] == [1, 2]
+    # Past the retire window, v1's key is destroyed (its row stays, as a record).
+    postgres.apply(db, versioned(db, rotateRequest="yearly-2027", retireAfterDays=0))
+    assert keys(db)[0] == (1, False, "first", True, True)
+    # Past the cryptoperiod: a new key on its own.
+    db.execute("update dbl_t_key.keys set created_at = now() - interval '400 days' where version = 2")
+    assert postgres.apply(db, versioned(db))["tokenizeKeyVersion"] == 3
+    assert keys(db)[2][2] == "cryptoperiod"
+    # Compromised: the replaced key goes at once.
+    postgres.apply(db, versioned(db, rotateRequest="leak-2028-01", compromised=True))
+    assert keys(db)[2] == (3, False, "cryptoperiod", True, True) and keys(db)[3][0] == 4
+    [(t4,)] = as_login("select dbl_t_key.tokenize('patient-1')")
+    assert t4.startswith("v4:")

@@ -95,7 +95,9 @@ transform when it deploys, from the tables and columns the transform's data cont
   back at the next reconcile (every ten minutes).
 - With `breakGlass`, it administers a NOLOGIN role `<login>_break_glass`. With `tokenize`, it may
   call `<login>_key.tokenize(text)`: HMAC-SHA256 with a key made inside the database, readable only by
-  the function's owner. The key never leaves the database.
+  the function's owner. The key never leaves the database. Keys are versioned (tokens read
+  `v2:...`), replaced yearly or on request, and the replaced key is destroyed 90 days later, or at
+  once when compromised (controllers/db-logins/README.md).
 - Deleting the binding takes the grants away. Schemas the login owns are product data, which only a
   person drops (VX-19), so the role and its key stay while it owns any.
 
