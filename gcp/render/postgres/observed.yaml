@@ -1,15 +1,4 @@
-# The composed resources as the provider reports them once Google Cloud has finished: pass with --observed-resources to render a later reconcile, where the XR gets its outputs and the password is kept.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: r-field-records-development-1a2b3c4d-postgres
-  namespace: dp-default-agtech-development-5f6e7d8c
-  annotations:
-    crossplane.io/composition-resource-name: password
-type: Opaque
-data:
-  password: cmVuZGVyLWZpeHR1cmUtcGFzc3dvcmQtbm90LXJlYWw=
----
+# The composed resources as the provider reports them once Google Cloud has finished: pass with --observed-resources to render a later reconcile, where the XR gets its outputs.
 apiVersion: sql.gcp.m.upbound.io/v1beta1
 kind: DatabaseInstance
 metadata:
@@ -46,13 +35,13 @@ status:
 apiVersion: sql.gcp.m.upbound.io/v1beta1
 kind: User
 metadata:
-  name: r-field-records-development-1a2b3c4d-app
+  name: r-field-records-development-1a2b3c4d-db-logins
   namespace: dp-default-agtech-development-5f6e7d8c
   annotations:
-    crossplane.io/composition-resource-name: user
+    crossplane.io/composition-resource-name: db-logins
 status:
   atProvider:
-    id: app//vx-r-field-records-development-1a2b3c4d
+    id: valxel-db-logins@agtech-development.iam//vx-r-field-records-development-1a2b3c4d
   conditions:
   - type: Ready
     status: "True"

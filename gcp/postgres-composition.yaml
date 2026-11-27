@@ -6,16 +6,12 @@
 #   User                the db-logins controller's service account (EnvironmentConfig
 #                       dbLoginsServiceAccount) as an IAM database user with cloudsqlsuperuser:
 #                       it signs in with short-lived tokens, never a password (VX-20)
-#   Secret              <name>-postgres in the cell namespace: the `app` user's password, made once
-#                       (random) and kept, never in the resource's status or the instance's spec.
-#                       For the components bound to the database until they sign in with their own
-#                       identity too (VX-20); the platform never signs in with it
 #   DatabaseInstance    Enterprise edition, private IP only on the data plane's network (which has
 #                       private services access), TLS required, CMEK with the product key,
 #                       backups with point-in-time recovery, deletion protection, max_connections
 #                       and HA by size; Query Insights on
 #   Database            the design's database
-#   User                `app`, with the Secret's password
+#   (no password user: every component signs in with a login of its own, postgres-login)
 #   AlertPolicy         the catalog's alarms: CPU high, disk nearly full
 #
 # Sizes (the catalog's, for the capacity plan): small db-g1-small, 50 connections; medium
@@ -78,29 +74,12 @@ spec:
                   "medium-ha" (dict "tier" "db-custom-2-8192" "ha" true "connections" "400")
                   "large" (dict "tier" "db-custom-4-16384" "ha" true "connections" "800") }}
             {{- $size := index $sizes (default "small" $xr.spec.size) }}
-            {{- $secret := printf "%s-postgres" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
-            {{- /* The password is made once: later reconciles keep what the Secret holds. */}}
-            {{- $password := randAlphaNum 32 | b64enc }}
-            {{- with getComposedResource . "password" }}{{- $password = dig "data" "password" $password . }}{{- end }}
             {{- $host := "" }}
             {{- with getComposedResource . "instance" }}{{- $host = dig "status" "atProvider" "privateIpAddress" "" . }}{{- end }}
             {{- $dbReady := false }}
             {{- with getComposedResource . "database" }}{{- $dbReady = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
-            {{- $userReady := false }}
-            {{- with getComposedResource . "user" }}{{- $userReady = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
-            ---
-            apiVersion: v1
-            kind: Secret
-            metadata:
-              name: {{ $secret }}
-              annotations:
-                {{ setResourceNameAnnotation "password" }}
-            type: Opaque
-            data:
-              password: {{ $password }}
-              username: {{ "app" | b64enc }}
-              port: {{ "5432" | b64enc }}
-              endpoint: {{ $host | b64enc }}
+            {{- $adminReady := false }}
+            {{- with getComposedResource . "db-logins" }}{{- $adminReady = ne (dig "status" "atProvider" "id" "" .) "" }}{{- end }}
             ---
             {{- /* Where the database is and how the db-logins controller signs in, for the product's
                    logins (postgres-login): named after the database, so a login needs only its name.
@@ -191,21 +170,6 @@ spec:
               forProvider:
                 project: {{ $env.project | quote }}
                 instance: {{ $name | quote }}
-            ---
-            apiVersion: sql.gcp.m.upbound.io/v1beta1
-            kind: User
-            metadata:
-              name: {{ printf "%s-app" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
-              annotations:
-                {{ setResourceNameAnnotation "user" }}
-                crossplane.io/external-name: app
-            spec:
-              forProvider:
-                project: {{ $env.project | quote }}
-                instance: {{ $name | quote }}
-                passwordSecretRef:
-                  name: {{ $secret | quote }}
-                  key: password
             {{- /* The catalog's standard alarms for postgres on Google Cloud (sdlc-governance platform/catalog.yaml). */}}
             {{- $filter := printf "resource.type=\"cloudsql_database\" AND resource.labels.database_id=\"%s:%s\"" $env.project $name }}
             {{- $alarms := list
@@ -250,7 +214,7 @@ spec:
                   {{- end }}
             {{- end }}
             {{- end }}
-            {{- if and $host $dbReady $userReady }}
+            {{- if and $host $dbReady $adminReady }}
             ---
             apiVersion: platform.valxel.dev/v1alpha1
             kind: PostgresDatabase
@@ -258,8 +222,6 @@ spec:
               host: {{ $host | quote }}
               port: "5432"
               database: {{ $xr.spec.database | quote }}
-              username: app
-              secret: {{ $secret | quote }}
             {{- end }}
 
     - step: ready

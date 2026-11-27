@@ -30,6 +30,14 @@ spec:
         component:
           type: string
           description: The component that signs in with its own workload identity.
+        access:
+          type: string
+          enum: [owner, reader, columns]
+          default: columns
+        grantRoles:
+          type: array
+          default: []
+          items: {type: string}
         reads:
           type: array
           description: SELECT on these columns of these tables (written by the SDLC tool from the data contracts).
@@ -69,6 +77,8 @@ spec:
       value: ${applied.instance.status.username}
     - name: auth
       value: ${applied.instance.status.auth}
+    - name: role
+      value: ${applied.instance.status.role}
     - name: break_glass_role
       value: ${applied.instance.status.breakGlassRole}
     - name: tokenize_function
@@ -88,6 +98,8 @@ spec:
           database: ${parameters.database}
           login: ${parameters.login}
           component: ${parameters.component}
+          access: ${parameters.access}
+          grantRoles: ${parameters.grantRoles}
           reads: ${parameters.reads}
           createSchemas: ${parameters.createSchemas}
           breakGlass: ${parameters.breakGlass}

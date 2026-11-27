@@ -3,7 +3,16 @@
 `plan` is the SQL, as a pure function of the login's spec, so it is tested on its own; `apply` runs
 it on an admin connection, inside one transaction, and checks the result.
 
-What a login gets, and nothing else:
+Every login has an access (spec.access):
+  - owner: it acts as the database's owner role, <database>_owner (NOLOGIN): the workload signs in
+    as itself and SETs ROLE <database>_owner, so the tables belong to the role, not to whoever
+    created them. The admin is a member of that role, so it can grant on those tables (a transform's
+    columns). Every table the owner makes is readable to <database>_reader. With grantRoles, NOLOGIN
+    roles the owner may grant to others (reporting's reporting_reader, for report logins);
+  - reader: it is a member of <database>_reader: SELECT on the owner's tables, nothing else;
+  - columns (a transform): exactly what spec.reads lists, as below.
+
+What a columns login gets, and nothing else:
   - CONNECT on its database, and CREATE when it builds its own schemas (a transform);
   - USAGE on each schema it reads, and SELECT on exactly the columns it was given. Column grants it
     holds and was not given any more are revoked, so a narrowed contract narrows the login;
@@ -52,6 +61,8 @@ class Login:
     principal: str  # the role the workload signs in as
     kind: str  # gcp-iam | azure-entra | password
     database: str
+    access: str = "columns"  # owner | reader | columns
+    grant_roles: tuple[str, ...] = ()  # owner only: NOLOGIN roles it may grant (reporting_reader)
     reads: tuple[Read, ...] = ()
     create_schemas: bool = False
     break_glass: bool = False
@@ -62,6 +73,14 @@ class Login:
     compromised: bool = False  # with a rotation request: destroy the replaced key at once
     azure_object_id: str = ""
     password: str = field(default="", repr=False)  # kind password only (end-to-end test)
+
+    @property
+    def owner_role(self) -> str:
+        return f"{self.database}_owner"
+
+    @property
+    def reader_role(self) -> str:
+        return f"{self.database}_reader"
 
     @property
     def break_glass_role(self) -> str:
@@ -89,11 +108,25 @@ def login_from_spec(spec: dict[str, Any], principal: str, kind: str, *, azure_ob
         if not cols:
             raise LoginError(f"read {r.get('schema')}.{r.get('table')} lists no columns")
         reads.append(Read(str(r.get("schema") or "public"), str(r["table"]), cols))
+    access = str(spec.get("access") or "columns")
+    if access not in ("owner", "reader", "columns"):
+        raise LoginError(f"access {access!r} must be owner, reader or columns")
+    grant_roles = tuple(str(r) for r in spec.get("grantRoles") or [])
+    for r in grant_roles:
+        if not NAME.match(r):
+            raise LoginError(f"grantRoles: {r!r} must match {NAME.pattern}")
+    if grant_roles and access != "owner":
+        raise LoginError("grantRoles is for an owner login only")
+    if access != "columns" and reads:
+        raise LoginError("reads is for a columns login (a transform); an owner or reader gets the whole store")
+    if len(str(spec["database"])) > 56:
+        raise LoginError("the database's name must be at most 56 characters (for <database>_owner)")
     key = spec.get("tokenizeKey") or {}
     rotate, retire = int(key.get("rotateEveryDays", 365)), int(key.get("retireAfterDays", 90))
     if not (1 <= rotate <= 3650 and 0 <= retire <= 3650):
         raise LoginError("tokenizeKey: rotateEveryDays must be 1 to 3650 and retireAfterDays 0 to 3650")
-    return Login(name=name, principal=principal, kind=kind, database=str(spec["database"]), reads=tuple(reads),
+    return Login(name=name, principal=principal, kind=kind, database=str(spec["database"]), access=access,
+                 grant_roles=grant_roles, reads=tuple(reads),
                  create_schemas=bool(spec.get("createSchemas")), break_glass=bool(spec.get("breakGlass")),
                  tokenize=bool(spec.get("tokenize")), rotate_every_days=rotate, retire_after_days=retire,
                  rotate_request=str(key.get("rotateRequest") or ""), compromised=bool(key.get("compromised")),
@@ -124,6 +157,15 @@ def plan(login: Login) -> list[sql.Composable]:
     out.append(sql.SQL("grant {} on database {} to {}").format(sql.SQL(privileges), db, p))
     if not login.create_schemas:
         out.append(sql.SQL("revoke create on database {} from {}").format(db, p))
+    if login.access == "owner":
+        out += _owner(login)
+    elif login.access == "reader":
+        out += _reader(login)
+    if login.reads:  # the admin acts for the store's owner role, if there is one, to grant on its tables
+        out.append(sql.SQL(
+            "do $$ begin if exists (select 1 from pg_roles where rolname = {}) then execute {}; end if; end $$"
+        ).format(sql.Literal(login.owner_role),
+                 sql.Literal(sql.SQL("grant {} to current_user").format(sql.Identifier(login.owner_role)).as_string(None))))
     for schema in sorted({r.schema for r in login.reads}):
         out.append(sql.SQL("grant usage on schema {} to {}").format(sql.Identifier(schema), p))
     for r in login.reads:
@@ -136,6 +178,34 @@ def plan(login: Login) -> list[sql.Composable]:
     if login.tokenize:
         out += _tokenize(login)
     return out
+
+
+def _store_roles(login: Login) -> list[sql.Composable]:
+    owner, reader = sql.Identifier(login.owner_role), sql.Identifier(login.reader_role)
+    return [
+        _role(login.owner_role, "nologin"),
+        _role(login.reader_role, "nologin"),
+        # The admin acts for the owner (grants on its tables), never signs in as it.
+        sql.SQL("grant {} to current_user").format(owner),
+        sql.SQL("grant usage, create on schema public to {}").format(owner),
+        sql.SQL("grant usage on schema public to {}").format(reader),
+        sql.SQL("grant select on all tables in schema public to {}").format(reader),
+        sql.SQL("alter default privileges for role {} in schema public grant select on tables to {}").format(
+            owner, reader),
+    ]
+
+
+def _owner(login: Login) -> list[sql.Composable]:
+    p, owner = sql.Identifier(login.principal), sql.Identifier(login.owner_role)
+    out = _store_roles(login) + [sql.SQL("grant {} to {}").format(owner, p)]
+    for r in login.grant_roles:
+        out += [_role(r, "nologin"), sql.SQL("grant {} to {} with admin option").format(sql.Identifier(r), owner)]
+    return out
+
+
+def _reader(login: Login) -> list[sql.Composable]:
+    return _store_roles(login) + [sql.SQL("grant {} to {}").format(
+        sql.Identifier(login.reader_role), sql.Identifier(login.principal))]
 
 
 NEW_KEY = "encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex')"
@@ -272,6 +342,7 @@ def apply(conn: Any, login: Login) -> dict[str, Any]:
             raise LoginError(f"role {login.principal} has {', '.join(bad)}: a product login may have none of them")
     return {
         "username": login.principal,
+        "role": login.owner_role if login.access == "owner" else "",
         "database": login.database,
         "breakGlassRole": login.break_glass_role if login.break_glass else "",
         "tokenizeFunction": f"{login.key_schema}.tokenize" if login.tokenize else "",
@@ -292,6 +363,9 @@ def remove(conn: Any, login: Login) -> str:
             return ""
         p = sql.Identifier(login.principal)
         cur.execute(sql.SQL("revoke all on database {} from {}").format(sql.Identifier(login.database), p))
+        for role in (login.owner_role, login.reader_role):
+            if login.access in ("owner", "reader") and _exists(cur, role):
+                cur.execute(sql.SQL("revoke {} from {}").format(sql.Identifier(role), p))
         for schema in sorted({r.schema for r in login.reads}):
             cur.execute(sql.SQL("revoke all on all tables in schema {} from {}").format(sql.Identifier(schema), p))
             cur.execute(sql.SQL("revoke usage on schema {} from {}").format(sql.Identifier(schema), p))
