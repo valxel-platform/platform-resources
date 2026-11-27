@@ -3,8 +3,9 @@
 # resources as OpenChoreo's postgres-crossplane. The parameters are what a design's Resources line
 # sets (the SDLC tool fills consumers and tags); environmentConfigs.size is set per environment by
 # the binding. It renders one PostgresDatabase into the cell namespace; the data plane's
-# Composition builds it as Cloud SQL in that environment's project. Components get the
-# credentials as outputs: the password by reference to its Secret, never as a value.
+# Composition builds it as Cloud SQL (or an Azure flexible server) in that environment's project.
+# Its outputs say only where it is: each component signs in with a login of its own (postgres-login),
+# as its own workload identity, and no password exists (VX-20).
 apiVersion: openchoreo.dev/v1alpha1
 kind: ClusterResourceType
 metadata:
@@ -31,8 +32,8 @@ spec:
         consumers:
           type: array
           description: >-
-            The components that use it (written by the SDLC tool from the approved design). They sign in
-            with the credentials in its outputs; no cloud roles.
+            The components that use it (written by the SDLC tool from the approved design). Each signs in
+            with a login of its own (postgres-login), as its own workload identity: no password.
           default: []
           items:
             type: object
@@ -73,12 +74,6 @@ spec:
       value: ${applied.instance.status.port}
     - name: database
       value: ${applied.instance.status.database}
-    - name: username
-      value: ${applied.instance.status.username}
-    - name: password
-      secretKeyRef:
-        name: ${applied.instance.status.secret}
-        key: password
 
   resources:
     - id: instance

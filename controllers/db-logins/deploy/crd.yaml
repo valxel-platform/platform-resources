@@ -43,6 +43,17 @@ spec:
                     password:
                       type: object
                       properties: { user: { type: string }, secret: { type: string } }
+                access:
+                  type: string
+                  enum: [owner, reader, columns]
+                  default: columns
+                  description: >-
+                    owner: acts as <database>_owner, which owns the tables (the workload SETs ROLE to
+                    it); reader: a member of <database>_reader; columns: exactly spec.reads.
+                grantRoles:
+                  type: array
+                  description: An owner only. NOLOGIN roles it may grant to others (reporting_reader).
+                  items: { type: string, pattern: "^[a-z][a-z0-9_]{0,40}$" }
                 reads:
                   type: array
                   items:

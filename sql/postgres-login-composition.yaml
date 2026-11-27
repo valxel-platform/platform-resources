@@ -1,5 +1,6 @@
 # Asks for a PostgresLogin on every cloud (catalog type postgres-login), with no password anywhere
-# (constitution VX-20).
+# (constitution VX-20). Every component that uses a product database has one: access owner (it acts
+# as <database>_owner, which owns the tables), reader, or columns (a transform).
 #
 #   DatabaseLogin    <name>: the request the db-logins controller (controllers/db-logins) carries out
 #                    in the database, from its own platform namespace, signing in with the platform's
@@ -58,6 +59,8 @@ spec:
               login: {{ $xr.spec.login }}
               principal:
                 component: {{ $xr.spec.component | quote }}
+              access: {{ $xr.spec.access | default "columns" }}
+              grantRoles: [{{ range $i, $r := default (list) $xr.spec.grantRoles }}{{ if $i }}, {{ end }}{{ $r | quote }}{{ end }}]
               reads:
                 {{- range $xr.spec.reads }}
                 - schema: {{ .schema }}
@@ -77,6 +80,7 @@ spec:
               port: {{ $made.port | quote }}
               database: {{ $made.database | quote }}
               username: {{ $made.username | quote }}
+              role: {{ $made.role | default "" | quote }}
               auth: {{ $made.auth | quote }}
               breakGlassRole: {{ $made.breakGlassRole | default "" | quote }}
               tokenizeFunction: {{ $made.tokenizeFunction | default "" | quote }}

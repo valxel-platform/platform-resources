@@ -207,3 +207,56 @@ def test_on_postgres_keys_rotate_and_old_ones_are_destroyed(db):
     assert keys(db)[2] == (3, False, "cryptoperiod", True, True) and keys(db)[3][0] == 4
     [(t4,)] = as_login("select dbl_t_key.tokenize('patient-1')")
     assert t4.startswith("v4:")
+
+
+def store_login(db, user, access, **spec):
+    return postgres.login_from_spec({"login": user, "database": db.info.dbname, "access": access, **spec}, user,
+                                    "password", password=f"{user}-pw-123")
+
+
+def as_(user, *stmts):
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    with psycopg.connect(make_conninfo(URL, user=user, password=f"{user}-pw-123"), autocommit=True) as c:
+        out = None
+        for s in stmts:
+            cur = c.execute(s)
+            out = cur.fetchall() if cur.description else None
+        return out
+
+
+@pg
+def test_on_postgres_an_owner_owns_through_the_stores_role_and_others_read_or_get_columns(db):
+    name = db.info.dbname
+    for role in ("dbl_rep", "dbl_api", "dbl_tr", f"{name}_owner", f"{name}_reader", "dbl_report_reader"):
+        db.execute(f"do $$ begin if exists (select 1 from pg_roles where rolname = '{role}') then "
+                   f"execute 'drop owned by {role}'; execute 'drop role {role}'; end if; end $$")
+    db.execute("drop table if exists public.visits")
+    made = postgres.apply(db, store_login(db, "dbl_rep", "owner", grantRoles=["dbl_report_reader"]))
+    assert made["role"] == f"{name}_owner"
+    # The owner makes its tables as the store's role, so they don't belong to its login.
+    as_("dbl_rep", f"set role {name}_owner", "create table public.visits (id text, patient text, clinic text)",
+        "insert into public.visits values ('v1', 'p1', 'c1')", "grant dbl_report_reader to reviewer")
+    assert db.execute("select tableowner from pg_tables where tablename = 'visits'").fetchone() == (f"{name}_owner",)
+    # A reader reads every table the owner makes, and writes none.
+    postgres.apply(db, store_login(db, "dbl_api", "reader"))
+    assert as_("dbl_api", "select id from public.visits") == [("v1",)]
+    with pytest.raises(Exception, match="permission denied"):
+        as_("dbl_api", "insert into public.visits values ('v2', 'p2', 'c2')")
+    # A transform gets exactly its columns of the owner's table: the admin acts for the owner.
+    postgres.apply(db, store_login(db, "dbl_tr", "columns",
+                                   reads=[{"schema": "public", "table": "visits", "columns": ["id", "clinic"]}]))
+    assert as_("dbl_tr", "select id, clinic from public.visits") == [("v1", "c1")]
+    with pytest.raises(Exception, match="permission denied"):
+        as_("dbl_tr", "select patient from public.visits")
+    # Taking the owner login away leaves the store's tables where they are.
+    assert postgres.remove(db, store_login(db, "dbl_rep", "owner", grantRoles=["dbl_report_reader"])) == ""
+    assert db.execute("select count(*) from public.visits").fetchone() == (1,)
+
+
+def test_owner_and_reader_specs_are_checked():
+    with pytest.raises(postgres.LoginError, match="grantRoles is for an owner"):
+        login(spec={"access": "reader", "reads": [], "grantRoles": ["x"]})
+    with pytest.raises(postgres.LoginError, match="reads is for a columns login"):
+        login(spec={"access": "owner"})

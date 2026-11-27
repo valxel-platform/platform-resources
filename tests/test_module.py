@@ -329,7 +329,8 @@ def test_a_login_is_a_request_to_the_controller_with_no_secret_anywhere():
         assert word not in text, word
     rt = doc(ROOT / "apis/postgres-login/resource-type.yaml")
     outputs = {o["name"]: o for o in rt["spec"]["outputs"]}
-    assert set(outputs) == {"host", "port", "database", "username", "auth", "break_glass_role", "tokenize_function"}
+    assert set(outputs) == {"host", "port", "database", "username", "auth", "role", "break_glass_role",
+                            "tokenize_function"}
     assert all("value" in o and "secretKeyRef" not in o for o in outputs.values())
     assert rt["spec"]["retainPolicy"] == "Delete"
 
@@ -355,8 +356,12 @@ def test_a_database_makes_the_controller_its_admin_and_says_where_it_is():
         assert 'name: {{ printf "%s-sql-admin" ($xr.spec.database | replace "_" "-")' in text
         assert "kind: ConfigMap" in text and f"auth: {auth}" in text and admin in text
         assert "ProviderConfig" not in text and "provider-sql" not in text
-        assert "autoGeneratePassword" not in text  # one password, made once, for bound components only
+        assert "autoGeneratePassword" not in text and "kind: Secret" not in text and "randAlphaNum" not in text
     gcp = (ROOT / "gcp/postgres-composition.yaml").read_text()
     assert "type: CLOUD_IAM_SERVICE_ACCOUNT" in gcp and "databaseRoles: [cloudsqlsuperuser]" in gcp
     assert "name: cloudsql.iam_authentication" in gcp
-    assert "activeDirectoryAuthEnabled: true" in (ROOT / "azure/postgres-composition.yaml").read_text()
+    azure = (ROOT / "azure/postgres-composition.yaml").read_text()
+    assert "activeDirectoryAuthEnabled: true" in azure and "passwordAuthEnabled: false" in azure
+    assert "administratorLogin" not in azure
+    rt = doc(ROOT / "apis/postgres/resource-type.yaml")
+    assert {o["name"] for o in rt["spec"]["outputs"]} == {"host", "port", "database"}  # no credentials

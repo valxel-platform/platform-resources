@@ -72,8 +72,5 @@ spec:
                   type: string
                 database:
                   type: string
-                username:
-                  type: string
-                secret:
-                  type: string
-                  description: The Secret in the cell namespace holding the user's password (key password).
+                # No username or password: each component signs in with a login of its own
+                # (postgres-login), as its own workload identity (VX-20).

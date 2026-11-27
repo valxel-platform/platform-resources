@@ -43,6 +43,19 @@ spec:
                 component:
                   type: string
                   description: The component that signs in, with its own WorkloadIdentity.
+                access:
+                  type: string
+                  description: >-
+                    owner (a component that writes the database: it acts as <database>_owner, which owns
+                    the tables), reader (SELECT on the owner's tables), or columns (a transform: exactly
+                    reads).
+                  enum: [owner, reader, columns]
+                  default: columns
+                grantRoles:
+                  type: array
+                  description: An owner only. NOLOGIN roles it may grant to others (reporting's reporting_reader).
+                  default: []
+                  items: {type: string, pattern: "^[a-z][a-z0-9_]{0,40}$"}
                 reads:
                   type: array
                   description: >-
@@ -89,6 +102,9 @@ spec:
                 username:
                   type: string
                   description: The role the component signs in as, with a token from its own identity.
+                role:
+                  type: string
+                  description: An owner's role, which it SETs after signing in (<database>_owner); empty otherwise.
                 auth:
                   type: string
                   description: How it signs in (gcp-iam, azure-entra).

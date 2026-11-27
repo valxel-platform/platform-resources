@@ -106,9 +106,14 @@ k3d against a real Postgres (`controllers/db-logins/e2e/check.sh`), checking wha
 can't do. Only that test signs in with passwords: the controller refuses them unless
 `DB_LOGINS_ALLOW_PASSWORD=1`, which no environment sets.
 
+Every component that uses a product database gets a login of its own, made by the SDLC tool:
+`owner` for a component that writes it (it SETs ROLE `<database>_owner` after signing in, so the
+tables belong to that role and the controller can grant a transform its columns), `reader` for one
+that only reads (`<database>_reader`), and `columns` for a transform. The `postgres` resource says
+only where the database is: no `app` user, no password, and password sign-in is off on Azure.
+
 Not yet: AWS (RDS IAM sign-in needs one grant from the master user, which AWS keeps in Secrets
-Manager), and the components bound to `postgres` itself (reporting), which still get the `app`
-password until they sign in with their own identity too; then password sign-in goes off.
+Manager); there, components still get OpenChoreo's postgres-crossplane credentials.
 
 ## How access works
 
